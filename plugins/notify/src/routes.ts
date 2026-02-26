@@ -1,73 +1,15 @@
 import type { Hono } from 'hono'
 import type Database from 'better-sqlite3'
 import { listNotifications } from './notification-log.js'
+import { listEvents } from './event-log.js'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export interface EventLogEntry {
-  id: string
-  type: string
-  refId: string | null
-  title: string
-  summary: string | null
-  status: string
-  data: Record<string, unknown> | null
-  createdAt: string
-}
-
-interface EventLogRow {
-  id: string
-  type: string
-  ref_id: string | null
-  title: string
-  summary: string | null
-  status: string
-  data_json: string | null
-  created_at: string
-}
-
 export interface NotifyRouteDeps {
   db: Database.Database
   sendNotify: (title: string, body: string, channel?: string) => Promise<void>
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function rowToEventEntry(r: EventLogRow): EventLogEntry {
-  return {
-    id: r.id,
-    type: r.type,
-    refId: r.ref_id,
-    title: r.title,
-    summary: r.summary,
-    status: r.status,
-    data: r.data_json ? JSON.parse(r.data_json) : null,
-    createdAt: r.created_at,
-  }
-}
-
-function listEvents(
-  db: Database.Database,
-  filter?: { type?: string; limit?: number },
-): EventLogEntry[] {
-  let sql = `SELECT * FROM event_log WHERE 1=1`
-  const params: unknown[] = []
-
-  if (filter?.type) {
-    const types = filter.type.split(',')
-    sql += ` AND type IN (${types.map(() => '?').join(',')})`
-    params.push(...types)
-  }
-
-  sql += ` ORDER BY created_at DESC LIMIT ?`
-  params.push(filter?.limit ?? 50)
-
-  const rows = db.prepare(sql).all(...params) as EventLogRow[]
-  return rows.map(rowToEventEntry)
 }
 
 // ---------------------------------------------------------------------------
@@ -126,8 +68,10 @@ export function registerNotifyRoutes(app: Hono, deps: NotifyRouteDeps): void {
   // ── GET /api/events ─────────────────────────────────────
   app.get('/api/events', (c) => {
     const type = c.req.query('type') || undefined
+    const refId = c.req.query('refId') || undefined
+    const days = c.req.query('days') ? Number(c.req.query('days')) : undefined
     const limit = c.req.query('limit') ? Number(c.req.query('limit')) : 50
-    const events = listEvents(db, { type, limit })
+    const events = listEvents(db, { type, refId, days, limit })
     return c.json({ events })
   })
 
