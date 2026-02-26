@@ -1,5 +1,7 @@
 import os from 'node:os'
 import { execFileSync } from 'node:child_process'
+import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
 import type {
   SystemMetrics,
   GpuMetrics,
@@ -168,11 +170,34 @@ export function collectDocker(): DockerContainer[] | null {
 // ── Claude Usage ────────────────────────────────────────
 
 /**
+ * Resolve OAuth token: explicit config > Claude Code credentials file.
+ */
+function resolveOAuthToken(configToken?: string): string | null {
+  if (configToken) return configToken
+
+  // Read from Claude Code's credential file (~/.claude/.credentials.json)
+  const credPath = join(process.env.HOME || '/root', '.claude', '.credentials.json')
+  if (!existsSync(credPath)) return null
+
+  try {
+    const creds = JSON.parse(readFileSync(credPath, 'utf-8'))
+    const oauth = creds?.claudeAiOauth
+    if (!oauth?.accessToken) return null
+    // Check token expiry
+    if (oauth.expiresAt && oauth.expiresAt <= Date.now()) return null
+    return oauth.accessToken
+  } catch {
+    return null
+  }
+}
+
+/**
  * Fetch Claude API usage from the OAuth endpoint.
- * Returns null if no token is configured or the request fails.
+ * Auto-discovers token from Claude Code credentials if not explicitly configured.
  */
 export async function collectClaude(oauthToken?: string): Promise<ClaudeUsage | null> {
-  if (!oauthToken) return null
+  const token = resolveOAuthToken(oauthToken)
+  if (!token) return null
 
   try {
     const controller = new AbortController()
@@ -180,7 +205,7 @@ export async function collectClaude(oauthToken?: string): Promise<ClaudeUsage | 
 
     const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
       headers: {
-        Authorization: `Bearer ${oauthToken}`,
+        Authorization: `Bearer ${token}`,
         'anthropic-beta': 'oauth-2025-04-20',
       },
       signal: controller.signal,
