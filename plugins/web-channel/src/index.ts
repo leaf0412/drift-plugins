@@ -50,7 +50,6 @@ export function createWebChannelPlugin(): DriftPlugin {
           stream?: boolean
           cwd?: string
           clientType?: string
-          permissionMode?: string
           model?: string
           source?: string
         }>()

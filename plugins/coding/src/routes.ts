@@ -138,7 +138,9 @@ function validateGitUrl(url: string): string | null {
     if (host === 'localhost' || host.startsWith('127.') || host === '::1'
         || host.startsWith('10.') || host.startsWith('192.168.')
         || /^172\.(1[6-9]|2\d|3[01])\./.test(host)
-        || host.startsWith('169.254.')) {
+        || host.startsWith('169.254.')
+        || host.startsWith('fc') || host.startsWith('fd')
+        || host.startsWith('fe80')) {
       return 'Internal/private URLs are not allowed'
     }
     return null

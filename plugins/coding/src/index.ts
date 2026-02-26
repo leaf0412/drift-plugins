@@ -51,6 +51,9 @@ export function createCodingPlugin(): DriftPlugin {
         // sets it before each chat invocation and clears it after.
         const tools = buildCodingTools(() => {
           if (workspaceMap.size === 0) return null
+          if (workspaceMap.size > 1) {
+            ctx.logger.warn(`Coding: ${workspaceMap.size} concurrent sessions, using first workspace`)
+          }
           return [...workspaceMap.values()][0]
         })
         for (const tool of tools) {
