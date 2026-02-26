@@ -4,7 +4,49 @@ import { join } from 'node:path'
 import cron from 'node-cron'
 import { collectStatus } from './collectors.js'
 import { formatMarkdown, formatFeishuCard } from './formatter.js'
-import type { SystemStatusConfig } from './types.js'
+import type { SystemStatusConfig, StatusReport } from './types.js'
+
+// ── Change Detection ─────────────────────────────────────
+
+/**
+ * Build a coarse fingerprint of a StatusReport for change detection.
+ * Rounds noisy metrics, skips always-changing fields (uptime, timestamp).
+ */
+function fingerprint(r: StatusReport): string {
+  const parts: string[] = []
+
+  if (r.system) {
+    const { cpuLoad, freeMemoryMB, totalMemoryMB, disks } = r.system
+    // CPU rounded to integer, memory rounded to nearest 100MB
+    parts.push(`cpu:${cpuLoad.map(v => Math.round(v)).join('/')}`)
+    parts.push(`mem:${Math.round(freeMemoryMB / 100)}/${Math.round(totalMemoryMB / 100)}`)
+    for (const d of disks) parts.push(`disk:${d.mount}:${d.availGB}`)
+  }
+
+  if (r.gpu) {
+    parts.push(`gpu:${Math.round(r.gpu.utilization)}/${Math.round(r.gpu.memoryUsedGB)}/${Math.round(r.gpu.temperatureC)}`)
+  }
+
+  if (r.docker) {
+    // Only care about up/down, not exact uptime text
+    for (const c of r.docker) {
+      const up = c.status.toLowerCase().startsWith('up') ? 'up' : 'down'
+      parts.push(`docker:${c.name}:${up}`)
+    }
+  }
+
+  if (r.claude) {
+    parts.push(`claude:${Math.round(r.claude.sevenDay.utilization)}/${Math.round(r.claude.fiveHour.utilization)}`)
+    parts.push(`cycle:${r.claude.cycleDayNum}`)
+  }
+
+  if (r.drift) {
+    // Skip uptimeSeconds (always changes), only track agent count
+    parts.push(`agents:${r.drift.agentCount}`)
+  }
+
+  return parts.join('|')
+}
 
 // ── Manifest ──────────────────────────────────────────────
 
@@ -59,6 +101,7 @@ export function createSystemStatusPlugin(): DriftPlugin {
   let task: cron.ScheduledTask | null = null
   let savedCtx: PluginContext | null = null
   let config: SystemStatusConfig
+  let lastFingerprint: string | null = null
 
   return {
     manifest,
@@ -75,6 +118,14 @@ export function createSystemStatusPlugin(): DriftPlugin {
       const run = async () => {
         try {
           const report = await collectStatus(config)
+          const fp = fingerprint(report)
+
+          if (fp === lastFingerprint) {
+            ctx.logger.info('System status: no changes, skipping push')
+            return
+          }
+          lastFingerprint = fp
+
           const markdown = formatMarkdown(report)
           const card = formatFeishuCard(report)
 
