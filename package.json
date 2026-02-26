@@ -1,0 +1,17 @@
+{
+  "name": "drift-plugins",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo 'External plugins are loaded from source by jiti — no build step needed'",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@drift/core": "link:../drift/packages/core",
+    "@drift/plugins": "link:../drift/packages/plugins",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0"
+  }
+}
