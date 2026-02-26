@@ -25,6 +25,34 @@ const EVENT_LOG_ATOM = 'event.log'
 
 type LogEventFn = (input: EventLogInput) => import('./event-log.js').EventLogEntry
 
+// ── Event Formatting ─────────────────────────────────────
+
+/**
+ * Extract human-readable content from event payloads.
+ * Known event shapes get their content field extracted;
+ * unknown payloads fall back to JSON.
+ */
+function formatEventContent(event: string, data: unknown): string {
+  if (typeof data === 'string') return data
+  if (!data || typeof data !== 'object') return String(data)
+
+  const obj = data as Record<string, unknown>
+
+  // cron.chat / cron.result / chat.complete — extract content + optional jobName header
+  if (typeof obj.content === 'string') {
+    const jobName = obj.jobName as string | undefined
+    return jobName ? `**${jobName}**\n\n${obj.content}` : obj.content
+  }
+
+  // task.reminder / cron.notify — extract title + body
+  if (typeof obj.title === 'string' && typeof obj.body === 'string') {
+    return `**${obj.title}**\n\n${obj.body}`
+  }
+
+  // Fallback: JSON
+  return JSON.stringify(data)
+}
+
 // ── Plugin Factory ────────────────────────────────────────
 
 /**
@@ -77,14 +105,13 @@ export function createNotifyPlugin(): DriftPlugin {
         const unsub = ctx.events.on(event, async (data) => {
           const channels = ctx.channels.list()
           for (const channel of channels) {
-            const title =
-              (data as Record<string, unknown>)?.jobName as string ??
-              (data as Record<string, unknown>)?.title as string ??
-              event
+            const obj = data as Record<string, unknown> | undefined
+            const title = obj?.jobName as string ?? obj?.title as string ?? event
+            const content = formatEventContent(event, data)
             try {
               await channel.send({
                 type: 'text',
-                content: typeof data === 'string' ? data : JSON.stringify(data),
+                content,
                 metadata: { event },
               })
               logNotification(db, {
