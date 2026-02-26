@@ -5,6 +5,8 @@ import type {
   Channel,
   OutgoingMessage,
 } from '@drift/core'
+import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { sendFeishuWebhook, sendFeishuText } from './webhook.js'
 import { FeishuWsClient } from './ws-client.js'
 import type { FeishuWsConfig } from './ws-client.js'
@@ -34,6 +36,28 @@ export interface FeishuPluginOptions {
   wsConfig?: FeishuWsConfig
 }
 
+// ── Config Loader ────────────────────────────────────────
+
+function readFeishuConfigFromFile(): FeishuPluginOptions {
+  const dataDir = process.env.DRIFT_DATA_DIR || join(process.env.HOME || '/tmp', '.drift')
+  const configPath = join(dataDir, 'config.json')
+  if (!existsSync(configPath)) return {}
+  try {
+    const raw = JSON.parse(readFileSync(configPath, 'utf-8'))
+    const feishu = raw?.channels?.feishu
+    if (!feishu?.enabled) return {}
+    return {
+      webhookUrl: feishu.webhookUrl,
+      secret: feishu.webhookSecret,
+      wsConfig: feishu.appId && feishu.appSecret ? {
+        appId: feishu.appId,
+        appSecret: feishu.appSecret,
+        allowFrom: feishu.allowFrom ?? [],
+      } : undefined,
+    }
+  } catch { return {} }
+}
+
 // ── Plugin Factory ────────────────────────────────────────
 
 /**
@@ -46,12 +70,14 @@ export interface FeishuPluginOptions {
  * during the `start()` phase to receive incoming Feishu messages and
  * route them through the chat pipeline.
  */
-export function createFeishuPlugin(options: FeishuPluginOptions): DriftPlugin {
+export function createFeishuPlugin(options?: FeishuPluginOptions): DriftPlugin {
+  // When loaded as external plugin (no args), read config from $DRIFT_DATA_DIR/config.json
+  const opts: FeishuPluginOptions = options ?? readFeishuConfigFromFile()
   let wsClient: FeishuWsClient | null = null
   let savedCtx: PluginContext | null = null
 
   return {
-    manifest: buildManifest(!!options.wsConfig),
+    manifest: buildManifest(!!opts.wsConfig),
 
     async init(ctx: PluginContext) {
       savedCtx = ctx
@@ -66,15 +92,15 @@ export function createFeishuPlugin(options: FeishuPluginOptions): DriftPlugin {
         },
 
         async send(msg: OutgoingMessage) {
-          if (!options.webhookUrl) return  // WebSocket-only mode, no outbound webhook
+          if (!opts.webhookUrl) return  // WebSocket-only mode, no outbound webhook
           if (msg.type === 'card' && msg.metadata?.card) {
             await sendFeishuWebhook(
-              options.webhookUrl,
+              opts.webhookUrl,
               msg.metadata.card as { msg_type: 'interactive'; card: Record<string, unknown> },
-              options.secret,
+              opts.secret,
             )
           } else {
-            await sendFeishuText(options.webhookUrl, msg.content, options.secret)
+            await sendFeishuText(opts.webhookUrl, msg.content, opts.secret)
           }
         },
       }
@@ -84,13 +110,13 @@ export function createFeishuPlugin(options: FeishuPluginOptions): DriftPlugin {
     },
 
     async start() {
-      if (!options.wsConfig || !savedCtx) return
+      if (!opts.wsConfig || !savedCtx) return
 
       const ctx = savedCtx
       const db = getStorageDb(ctx)
       const chatHandle = getChatHandle(ctx)
 
-      wsClient = new FeishuWsClient(options.wsConfig, {
+      wsClient = new FeishuWsClient(opts.wsConfig, {
         chatHandle,
         deleteSession: (sessionId: string) => deleteSession(db, sessionId),
         deleteSessionsByPrefix: (prefix: string) => deleteSessionsByPrefix(db, prefix),
