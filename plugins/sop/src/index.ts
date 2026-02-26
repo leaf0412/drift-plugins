@@ -45,22 +45,15 @@ function loadSopsFromDir(sopDir: string, logger: PluginContext['logger']): Map<s
   return registry
 }
 
-// ── Tool Registration Helper Type ─────────────────────────────
-
-interface ToolRegistration {
-  name: string
-  description: string
-  parametersSchema: Record<string, unknown>
-  execute: (args: unknown) => Promise<{ success: boolean; output: string; error?: string }>
-}
-
 // ── Tool Builders ─────────────────────────────────────────────
+
+type SopToolDef = NonNullable<Parameters<NonNullable<PluginContext['registerTool']>>[0]>
 
 function buildSopTools(
   getRegistry: () => Map<string, Sop>,
   executor: SopExecutor,
   events: PluginContext['events'],
-): ToolRegistration[] {
+): SopToolDef[] {
   return [
     // sop_list — list all available SOPs
     {
@@ -194,12 +187,11 @@ export function createSopPlugin(mindDir: string): DriftPlugin {
       // Publish registry atom for inter-plugin access
       ctx.atoms.atom<Map<string, Sop>>('sop.registry', new Map()).reset(registry)
 
-      // Register tools via ctx.registerTool if available (extended context)
-      const extCtx = ctx as PluginContext & { registerTool?: (reg: ToolRegistration) => void }
-      if (extCtx.registerTool) {
+      // Register tools via ctx.registerTool if available
+      if (ctx.registerTool) {
         const tools = buildSopTools(() => registry, executor, ctx.events)
         for (const tool of tools) {
-          extCtx.registerTool(tool)
+          ctx.registerTool(tool)
         }
         ctx.logger.debug(`SOP: ${tools.length} tools registered`)
       }

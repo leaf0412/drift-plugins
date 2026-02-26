@@ -14,7 +14,7 @@ const manifest: PluginManifest = {
     routes: ['/api/tasks', '/api/tasks/:id'],
     events: { emit: ['task.reminder', 'task.created', 'task.completed'] },
   },
-  depends: ['storage', 'http', 'notify'],
+  depends: ['storage', 'http'],
 }
 
 // ── Plugin Factory ────────────────────────────────────────
