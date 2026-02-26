@@ -1,9 +1,7 @@
 import type { Hono } from 'hono'
 import type Database from 'better-sqlite3'
 import { execSync } from 'node:child_process'
-import { createReadStream } from 'node:fs'
 import { join } from 'node:path'
-import { Readable } from 'node:stream'
 import {
   createCodingSession,
   getCodingSession,
@@ -129,7 +127,7 @@ function streamToSse(
 
 // ── Permission Mode Mapping ───────────────────────────────────
 
-function mapPermissionMode(sessionMode: string): string | undefined {
+function mapPermissionMode(sessionMode: string): string {
   switch (sessionMode) {
     case 'full':
       return 'bypassPermissions'
@@ -137,7 +135,7 @@ function mapPermissionMode(sessionMode: string): string | undefined {
       return 'acceptEdits'
     case 'readonly':
     default:
-      return undefined // default SDK permission mode
+      return 'default'
   }
 }
 
