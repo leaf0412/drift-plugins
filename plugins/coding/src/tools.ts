@@ -1,12 +1,12 @@
 import type { DriftToolRegistration, DriftToolResult } from '@drift/core'
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 type ToolRegistration = Omit<DriftToolRegistration, 'pluginId' | 'source'>
 
-function git(cmd: string, cwd: string): string {
-  return execSync(`git ${cmd}`, {
+function git(args: string[], cwd: string): string {
+  return execFileSync('git', args, {
     cwd,
     encoding: 'utf-8',
     timeout: 30_000,
@@ -66,7 +66,7 @@ export function buildCodingTools(
       parametersSchema: { type: 'object', properties: {}, required: [] },
       execute: withWorkspace((cwd) => ({
         success: true,
-        output: git('status --short', cwd) || '(clean)',
+        output: git(['status', '--short'], cwd) || '(clean)',
       })),
     },
     {
@@ -80,10 +80,10 @@ export function buildCodingTools(
         },
       },
       execute: withWorkspace((cwd, args) => {
-        const flag = (args as any)?.staged ? '--staged' : ''
+        const gitArgs = (args as any)?.staged ? ['diff', '--staged'] : ['diff']
         return {
           success: true,
-          output: git(`diff ${flag}`, cwd) || '(no changes)',
+          output: git(gitArgs, cwd) || '(no changes)',
         }
       }),
     },
@@ -99,8 +99,8 @@ export function buildCodingTools(
       },
       execute: withWorkspace((cwd, args) => {
         const msg = (args as any).message
-        git('add -A', cwd)
-        const out = git(`commit -m "${msg.replace(/"/g, '\\"')}"`, cwd)
+        git(['add', '-A'], cwd)
+        const out = git(['commit', '-m', msg], cwd)
         return { success: true, output: out }
       }),
     },
@@ -120,7 +120,7 @@ export function buildCodingTools(
         const n = (args as any)?.count || 10
         return {
           success: true,
-          output: git(`log --oneline -${n}`, cwd),
+          output: git(['log', '--oneline', `-${n}`], cwd),
         }
       }),
     },

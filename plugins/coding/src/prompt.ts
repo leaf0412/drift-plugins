@@ -64,6 +64,7 @@ export function buildCodingPrompt(workspacePath: string, projectName: string): s
   parts.push('- `code_tree` — View project structure')
   parts.push('')
   parts.push('### Guidelines')
+  parts.push('- IMPORTANT: All file operations must stay within the workspace directory. Do not use absolute paths outside the project.')
   parts.push('- Commit frequently with descriptive messages')
   parts.push('- Run tests after changes when possible')
   parts.push('- Keep changes focused on the requested task')

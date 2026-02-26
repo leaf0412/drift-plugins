@@ -1,6 +1,6 @@
 import type { Hono } from 'hono'
 import type Database from 'better-sqlite3'
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import {
   createCodingSession,
@@ -26,6 +26,7 @@ type ChatStreamFn = (
 export interface CodingRouteDeps {
   db: Database.Database
   getChatStream: () => ChatStreamFn | null
+  setActiveWorkspace: (path: string | null) => void
 }
 
 // ── SSE Helpers ───────────────────────────────────────────────
@@ -157,6 +158,11 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
       return c.json({ error: 'projectName is required' }, 400)
     }
 
+    const validModes = ['full', 'supervised', 'readonly']
+    if (body.permissionMode && !validModes.includes(body.permissionMode)) {
+      return c.json({ error: `Invalid permissionMode. Must be one of: ${validModes.join(', ')}` }, 400)
+    }
+
     try {
       const session = await createCodingSession(db, {
         projectName: body.projectName,
@@ -167,7 +173,7 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
       // Clone or init git
       if (body.gitUrl) {
         try {
-          execSync(`git clone ${body.gitUrl} .`, {
+          execFileSync('git', ['clone', body.gitUrl, '.'], {
             cwd: session.workspace_path,
             stdio: 'ignore',
             timeout: 60_000,
@@ -186,7 +192,7 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
         initGitRepo(session.workspace_path)
       }
 
-      return c.json(session, 201)
+      return c.json({ session }, 201)
     } catch (err) {
       return c.json(
         { error: err instanceof Error ? err.message : 'Failed to create session' },
@@ -199,7 +205,7 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
 
   app.get('/api/code/sessions', (c) => {
     const sessions = listCodingSessions(db)
-    return c.json(sessions)
+    return c.json({ sessions })
   })
 
   // ── GET /api/code/sessions/:id — Get session ───────────────
@@ -207,7 +213,7 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
   app.get('/api/code/sessions/:id', (c) => {
     const session = getCodingSession(db, c.req.param('id'))
     if (!session) return c.json({ error: 'Session not found' }, 404)
-    return c.json(session)
+    return c.json({ session })
   })
 
   // ── DELETE /api/code/sessions/:id — Delete session ──────────
@@ -224,16 +230,16 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
 
   app.post('/api/code/chat', async (c) => {
     const body = await c.req.json<{
-      sessionId: string
+      codingSessionId: string
       message: string
       model?: string
     }>()
 
-    if (!body.sessionId || !body.message) {
-      return c.json({ error: 'sessionId and message are required' }, 400)
+    if (!body.codingSessionId || !body.message) {
+      return c.json({ error: 'codingSessionId and message are required' }, 400)
     }
 
-    const session = getCodingSession(db, body.sessionId)
+    const session = getCodingSession(db, body.codingSessionId)
     if (!session) {
       return c.json({ error: 'Coding session not found' }, 404)
     }
@@ -260,6 +266,9 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
       updateCodingSession(db, session.id, { chat_session_id: chatSessionId })
     }
 
+    // Activate workspace so registered tools resolve to the correct directory
+    deps.setActiveWorkspace(session.workspace_path)
+
     const events = chatStream({
       message: body.message,
       sessionId: chatSessionId,
@@ -272,7 +281,16 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
       source: 'user',
     })
 
-    return streamToSse(events)
+    // Wrap the generator to clear workspace when stream finishes
+    const wrappedEvents = (async function* () {
+      try {
+        yield* events
+      } finally {
+        deps.setActiveWorkspace(null)
+      }
+    })()
+
+    return streamToSse(wrappedEvents)
   })
 
   // ── GET /api/code/diff/:id — Git diff for session ──────────
@@ -282,24 +300,24 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
     if (!session) return c.json({ error: 'Session not found' }, 404)
 
     try {
-      const diff = execSync('git diff HEAD', {
+      const diff = execFileSync('git', ['diff', 'HEAD'], {
         cwd: session.workspace_path,
         encoding: 'utf-8',
         timeout: 10_000,
       }).trim()
 
       // Also include staged changes
-      const staged = execSync('git diff --staged', {
+      const staged = execFileSync('git', ['diff', '--staged'], {
         cwd: session.workspace_path,
         encoding: 'utf-8',
         timeout: 10_000,
       }).trim()
 
       // Git log for context
-      const log = execSync('git log --oneline -20', {
+      const log = execFileSync('git', ['log', '--oneline', '-20'], {
         cwd: session.workspace_path,
         encoding: 'utf-8',
-        timeout: 10_000,
+        timeout: 5_000,
       }).trim()
 
       return c.json({
@@ -323,8 +341,9 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
 
     try {
       // Create tar.gz excluding .git and node_modules
-      const tarProcess = execSync(
-        'tar czf - --exclude=.git --exclude=node_modules .',
+      const tarProcess = execFileSync(
+        'tar',
+        ['czf', '-', '--exclude=.git', '--exclude=node_modules', '.'],
         {
           cwd: session.workspace_path,
           maxBuffer: 100 * 1024 * 1024, // 100MB

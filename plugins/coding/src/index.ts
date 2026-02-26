@@ -19,6 +19,8 @@ const manifest: PluginManifest = {
 // ── Plugin Factory ────────────────────────────────────────────
 
 export function createCodingPlugin(): DriftPlugin {
+  let activeWorkspacePath: string | null = null
+
   return {
     manifest,
 
@@ -26,7 +28,8 @@ export function createCodingPlugin(): DriftPlugin {
       const db = getStorageDb(ctx)
       const app = getHttpApp(ctx)
 
-      // Register HTTP routes
+      // Register HTTP routes — pass workspace setter so the chat route
+      // can activate the correct workspace before streaming begins.
       registerCodingRoutes(app, {
         db,
         getChatStream: () => {
@@ -36,14 +39,14 @@ export function createCodingPlugin(): DriftPlugin {
             return null
           }
         },
+        setActiveWorkspace: (path: string | null) => { activeWorkspacePath = path },
       })
 
       // Register git tools via PluginRegistry
       if (ctx.registerTool) {
-        // Workspace path is set per-chat via routes — tools use a closure
-        // that the route handler sets before each chat invocation.
-        // For standalone tool calls, we return null (no active workspace).
-        const tools = buildCodingTools(() => null)
+        // Tools read activeWorkspacePath via closure — route handler
+        // sets it before each chat invocation and clears it after.
+        const tools = buildCodingTools(() => activeWorkspacePath)
         for (const tool of tools) {
           ctx.registerTool(tool)
         }
