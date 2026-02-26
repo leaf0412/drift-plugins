@@ -16,8 +16,8 @@ const manifest: PluginManifest = {
   version: '1.0.0',
   type: 'code',
   capabilities: {
-    tools: ['plugin_create', 'plugin_list', 'plugin_read', 'plugin_update', 'plugin_delete'],
-    events: { emit: ['plugin.created', 'plugin.updated', 'plugin.deleted'] },
+    tools: ['plugin_create', 'plugin_list', 'plugin_read', 'plugin_update', 'plugin_delete', 'plugin_reload'],
+    events: { emit: ['plugin.created', 'plugin.updated', 'plugin.deleted', 'plugin.reload', 'plugin.reload-all'] },
     filesystem: ['pluginsDir'],
   },
   depends: [],
@@ -270,6 +270,34 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         rmSync(dir, { recursive: true, force: true })
         await events.emit('plugin.deleted', { name })
         return { success: true, output: `Plugin "${name}" deleted` }
+      },
+    },
+
+    // ── plugin_reload ────────────────────────────────────────
+    {
+      name: 'plugin_reload',
+      description: 'Hot-reload a plugin or all plugins without restarting the daemon. Stops the old instance, clears cache, re-loads from disk, and re-initializes.',
+      parametersSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Plugin name to reload. Omit to reload ALL external plugins.' },
+        },
+        required: [],
+      },
+      async execute(args: unknown): Promise<DriftToolResult> {
+        const { name } = (args as { name?: string }) || {}
+
+        if (name) {
+          if (isBuiltin(name)) {
+            return { success: false, output: '', error: `Cannot reload builtin plugin "${name}"` }
+          }
+          await events.emit('plugin.reload', { name })
+          return { success: true, output: `Reload triggered for plugin "${name}"` }
+        }
+
+        // Reload all
+        await events.emit('plugin.reload-all', {})
+        return { success: true, output: 'Reload triggered for all external plugins' }
       },
     },
   ]
