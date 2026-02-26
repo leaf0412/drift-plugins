@@ -1,6 +1,7 @@
 import type { DriftPlugin, PluginManifest, PluginContext } from '@drift/core'
 import type { DriftChannel, InboundMessage } from '@drift/plugins'
-import { getChannelRouter, getChatHandle, getChatPending, getHttpApp } from '@drift/plugins'
+import { getChatHandle, getChatPending, getHttpApp } from '@drift/plugins'
+import { getChannelRouter } from '../../channel/src/index.js'
 import { chatEventsToSse } from './sse.js'
 
 // ── Plugin Manifest ──────────────────────────────────────────

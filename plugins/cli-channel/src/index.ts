@@ -1,6 +1,6 @@
 import type { DriftPlugin, PluginManifest, PluginContext } from '@drift/core'
 import type { DriftChannel } from '@drift/plugins'
-import { getChannelRouter } from '@drift/plugins'
+import { getChannelRouter } from '../../channel/src/index.js'
 
 const manifest: PluginManifest = {
   name: 'cli-channel',

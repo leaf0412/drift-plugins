@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createCliChannelPlugin } from './index.js'
 import type { PluginContext, LoggerLike } from '@drift/core'
-import { ChannelRouter } from '@drift/plugins'
+import { ChannelRouter } from '../../channel/src/index.js'
 
 // ── Test helpers ──────────────────────────────────────────────
 

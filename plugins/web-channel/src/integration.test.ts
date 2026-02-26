@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ChannelRouter } from '@drift/plugins'
+import { ChannelRouter } from '../../channel/src/index.js'
 import type { ChatEvent, ChatHandler, InboundMessage, DriftChannel } from '@drift/plugins'
 import { chatEventsToSse } from './sse.js'
 
