@@ -1,0 +1,13 @@
+{
+  "name": "drift-plugin-system-status",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "node-cron": "^3.0.3"
+  },
+  "devDependencies": {
+    "@drift/core": "link:../../../drift/packages/core"
+  }
+}
