@@ -32,8 +32,11 @@ export interface DockerContainer {
 // ── Claude Usage ────────────────────────────────────────
 
 export interface ClaudeUsage {
+  subscriptionType: string | null  // "max", "pro", "team", etc.
   sevenDay: { utilization: number; resetsAt: string | null }
   fiveHour: { utilization: number; resetsAt: string | null }
+  sevenDaySonnet: { utilization: number; resetsAt: string | null } | null
+  sevenDayOpus: { utilization: number; resetsAt: string | null } | null
   cycleDayNum: number
   cycleDayTotal: number
 }

@@ -170,34 +170,42 @@ export function collectDocker(): DockerContainer[] | null {
 // ── Claude Usage ────────────────────────────────────────
 
 /**
- * Resolve OAuth token: explicit config > Claude Code credentials file.
+ * Resolve OAuth credentials: explicit token config > Claude Code credentials file.
+ * Returns both token and subscription metadata.
  */
-function resolveOAuthToken(configToken?: string): string | null {
-  if (configToken) return configToken
-
-  // Read from Claude Code's credential file (~/.claude/.credentials.json)
+function resolveOAuthCredentials(configToken?: string): { token: string; subscriptionType: string | null } | null {
   const credPath = join(process.env.HOME || '/root', '.claude', '.credentials.json')
-  if (!existsSync(credPath)) return null
+  let subscriptionType: string | null = null
 
-  try {
-    const creds = JSON.parse(readFileSync(credPath, 'utf-8'))
-    const oauth = creds?.claudeAiOauth
-    if (!oauth?.accessToken) return null
-    // Check token expiry
-    if (oauth.expiresAt && oauth.expiresAt <= Date.now()) return null
-    return oauth.accessToken
-  } catch {
-    return null
+  // Always try to read subscription info from credentials file
+  if (existsSync(credPath)) {
+    try {
+      const creds = JSON.parse(readFileSync(credPath, 'utf-8'))
+      const oauth = creds?.claudeAiOauth
+      subscriptionType = oauth?.subscriptionType ?? null
+
+      if (!configToken) {
+        if (!oauth?.accessToken) return null
+        if (oauth.expiresAt && oauth.expiresAt <= Date.now()) return null
+        return { token: oauth.accessToken, subscriptionType }
+      }
+    } catch {
+      // fall through
+    }
   }
+
+  if (configToken) return { token: configToken, subscriptionType }
+  return null
 }
 
 /**
  * Fetch Claude API usage from the OAuth endpoint.
  * Auto-discovers token from Claude Code credentials if not explicitly configured.
+ * Reads subscription type and per-model usage breakdowns.
  */
 export async function collectClaude(oauthToken?: string): Promise<ClaudeUsage | null> {
-  const token = resolveOAuthToken(oauthToken)
-  if (!token) return null
+  const creds = resolveOAuthCredentials(oauthToken)
+  if (!creds) return null
 
   try {
     const controller = new AbortController()
@@ -205,7 +213,7 @@ export async function collectClaude(oauthToken?: string): Promise<ClaudeUsage | 
 
     const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${creds.token}`,
         'anthropic-beta': 'oauth-2025-04-20',
       },
       signal: controller.signal,
@@ -217,10 +225,18 @@ export async function collectClaude(oauthToken?: string): Promise<ClaudeUsage | 
     const data = await res.json() as {
       seven_day?: { utilization?: number; resets_at?: string }
       five_hour?: { utilization?: number; resets_at?: string }
+      seven_day_sonnet?: { utilization?: number; resets_at?: string } | null
+      seven_day_opus?: { utilization?: number; resets_at?: string } | null
     }
 
     const sevenDay = data.seven_day ?? {}
     const fiveHour = data.five_hour ?? {}
+
+    // Per-model limits
+    const parseTier = (tier: typeof data.seven_day_sonnet) => {
+      if (!tier || tier.utilization == null) return null
+      return { utilization: tier.utilization, resetsAt: tier.resets_at ?? null }
+    }
 
     // Calculate cycle day: reset is 7 days after cycle start
     let cycleDayNum = 1
@@ -234,6 +250,7 @@ export async function collectClaude(oauthToken?: string): Promise<ClaudeUsage | 
     }
 
     return {
+      subscriptionType: creds.subscriptionType,
       sevenDay: {
         utilization: sevenDay.utilization ?? 0,
         resetsAt: sevenDay.resets_at ?? null,
@@ -242,6 +259,8 @@ export async function collectClaude(oauthToken?: string): Promise<ClaudeUsage | 
         utilization: fiveHour.utilization ?? 0,
         resetsAt: fiveHour.resets_at ?? null,
       },
+      sevenDaySonnet: parseTier(data.seven_day_sonnet),
+      sevenDayOpus: parseTier(data.seven_day_opus),
       cycleDayNum,
       cycleDayTotal,
     }

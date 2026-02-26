@@ -36,7 +36,9 @@ function fingerprint(r: StatusReport): string {
   }
 
   if (r.claude) {
-    parts.push(`claude:${Math.round(r.claude.sevenDay.utilization)}/${Math.round(r.claude.fiveHour.utilization)}`)
+    parts.push(`claude:${r.claude.subscriptionType}/${Math.round(r.claude.sevenDay.utilization)}/${Math.round(r.claude.fiveHour.utilization)}`)
+    if (r.claude.sevenDaySonnet) parts.push(`sonnet:${Math.round(r.claude.sevenDaySonnet.utilization)}`)
+    if (r.claude.sevenDayOpus) parts.push(`opus:${Math.round(r.claude.sevenDayOpus.utilization)}`)
     parts.push(`cycle:${r.claude.cycleDayNum}`)
   }
 

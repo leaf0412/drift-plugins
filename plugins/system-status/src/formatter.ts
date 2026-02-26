@@ -75,13 +75,17 @@ export function formatMarkdown(report: StatusReport): string {
 
   // Claude
   if (report.claude) {
-    const { sevenDay, fiveHour, cycleDayNum, cycleDayTotal } = report.claude
-    sections.push([
-      '**Claude**',
+    const { subscriptionType, sevenDay, fiveHour, sevenDaySonnet, sevenDayOpus, cycleDayNum, cycleDayTotal } = report.claude
+    const planLabel = subscriptionType ? ` (${subscriptionType.charAt(0).toUpperCase() + subscriptionType.slice(1)})` : ''
+    const lines = [
+      `**Claude${planLabel}**`,
       `- \u5168\u6A21\u578B\u5468\u9650\u989D: ${Math.round(sevenDay.utilization)}%`,
       `- 5h \u7A97\u53E3: ${Math.round(fiveHour.utilization)}%`,
-      `- \u5468\u671F\u7B2C${cycleDayNum}\u5929 (\u5171${cycleDayTotal}\u5929)`,
-    ].join('\n'))
+    ]
+    if (sevenDaySonnet) lines.push(`- Sonnet \u5468\u9650\u989D: ${Math.round(sevenDaySonnet.utilization)}%`)
+    if (sevenDayOpus) lines.push(`- Opus \u5468\u9650\u989D: ${Math.round(sevenDayOpus.utilization)}%`)
+    lines.push(`- \u5468\u671F\u7B2C${cycleDayNum}\u5929 (\u5171${cycleDayTotal}\u5929)`)
+    sections.push(lines.join('\n'))
   }
 
   // Drift
@@ -156,14 +160,17 @@ export function formatFeishuCard(report: StatusReport): {
 
   // Claude section
   if (report.claude) {
-    const { sevenDay, fiveHour, cycleDayNum, cycleDayTotal } = report.claude
-    const content = [
-      `**\uD83E\uDDE0 Claude**`,
+    const { subscriptionType, sevenDay, fiveHour, sevenDaySonnet, sevenDayOpus, cycleDayNum, cycleDayTotal } = report.claude
+    const planLabel = subscriptionType ? ` (${subscriptionType.charAt(0).toUpperCase() + subscriptionType.slice(1)})` : ''
+    const lines = [
+      `**\uD83E\uDDE0 Claude${planLabel}**`,
       `\u5168\u6A21\u578B\u5468\u9650\u989D: ${Math.round(sevenDay.utilization)}%`,
       `5h \u7A97\u53E3: ${Math.round(fiveHour.utilization)}%`,
-      `\u5468\u671F\u7B2C${cycleDayNum}\u5929 (\u5171${cycleDayTotal}\u5929)`,
-    ].join('\n')
-    elements.push({ tag: 'markdown', content })
+    ]
+    if (sevenDaySonnet) lines.push(`Sonnet \u5468\u9650\u989D: ${Math.round(sevenDaySonnet.utilization)}%`)
+    if (sevenDayOpus) lines.push(`Opus \u5468\u9650\u989D: ${Math.round(sevenDayOpus.utilization)}%`)
+    lines.push(`\u5468\u671F\u7B2C${cycleDayNum}\u5929 (\u5171${cycleDayTotal}\u5929)`)
+    elements.push({ tag: 'markdown', content: lines.join('\n') })
     elements.push({ tag: 'hr' })
   }
 
