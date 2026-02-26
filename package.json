@@ -10,8 +10,20 @@
   "devDependencies": {
     "@drift/core": "link:../drift/packages/core",
     "@drift/plugins": "link:../drift/packages/plugins",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
+    "better-sqlite3": "^12.6.2",
+    "dayjs": "^1.11.19",
+    "gray-matter": "^4.0.3",
+    "hono": "4.11.9",
+    "nanoid": "^5.1.6",
     "typescript": "^5.0.0",
     "vitest": "^3.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
   }
 }
