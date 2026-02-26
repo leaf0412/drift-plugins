@@ -79,6 +79,7 @@ export function createSystemStatusPlugin(): DriftPlugin {
           const card = formatFeishuCard(report)
 
           const channels = ctx.channels.list()
+          ctx.logger.info(`System status: pushing to ${channels.length} channel(s)`)
           for (const ch of channels) {
             try {
               await ch.send({
@@ -95,8 +96,8 @@ export function createSystemStatusPlugin(): DriftPlugin {
         }
       }
 
-      // Run immediately on start, then on schedule
-      await run()
+      // Delay initial run to let all plugins (channels) finish starting
+      setTimeout(run, 5000)
       task = cron.schedule(config.interval, run)
 
       ctx.logger.info(`System status: scheduled at "${config.interval}"`)
