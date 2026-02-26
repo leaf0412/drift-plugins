@@ -1,6 +1,22 @@
-import { execSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+
+function listTree(dir: string, prefix: string, depth: number, lines: string[], maxLines: number): void {
+  if (depth <= 0 || lines.length >= maxLines) return
+  let entries: string[]
+  try { entries = readdirSync(dir).sort() } catch { return }
+  for (const entry of entries) {
+    if (lines.length >= maxLines) break
+    if (entry === '.git' || entry === 'node_modules') continue
+    lines.push(prefix + entry)
+    const full = join(dir, entry)
+    try {
+      if (statSync(full).isDirectory()) {
+        listTree(full, prefix + entry + '/', depth - 1, lines, maxLines)
+      }
+    } catch { /* skip unreadable */ }
+  }
+}
 
 export function buildCodingPrompt(workspacePath: string, projectName: string): string {
   const parts: string[] = []
@@ -12,14 +28,15 @@ export function buildCodingPrompt(workspacePath: string, projectName: string): s
 
   // Project tree (compact)
   try {
-    const tree = execSync('find . -maxdepth 3 -not -path "./.git/*" -not -path "*/node_modules/*" | head -100', {
-      cwd: workspacePath, encoding: 'utf-8', timeout: 5000,
-    }).trim()
-    parts.push('### Project Structure')
-    parts.push('```')
-    parts.push(tree)
-    parts.push('```')
-    parts.push('')
+    const lines: string[] = []
+    listTree(workspacePath, './', 3, lines, 100)
+    if (lines.length > 0) {
+      parts.push('### Project Structure')
+      parts.push('```')
+      parts.push(lines.join('\n'))
+      parts.push('```')
+      parts.push('')
+    }
   } catch { /* skip */ }
 
   // Detect config files for context

@@ -67,7 +67,6 @@ export function createWebChannelPlugin(): DriftPlugin {
             userId: 'owner',
             cwd: body.cwd,
             clientType: body.clientType ?? 'web',
-            permissionMode: body.permissionMode,
             model: body.model,
             source: body.source ?? 'user',
           },

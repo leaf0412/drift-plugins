@@ -19,7 +19,7 @@ const manifest: PluginManifest = {
 // ── Plugin Factory ────────────────────────────────────────────
 
 export function createCodingPlugin(): DriftPlugin {
-  let activeWorkspacePath: string | null = null
+  const workspaceMap = new Map<string, string>()
 
   return {
     manifest,
@@ -39,14 +39,20 @@ export function createCodingPlugin(): DriftPlugin {
             return null
           }
         },
-        setActiveWorkspace: (path: string | null) => { activeWorkspacePath = path },
+        setActiveWorkspace: (sessionId: string, path: string | null) => {
+          if (path) workspaceMap.set(sessionId, path)
+          else workspaceMap.delete(sessionId)
+        },
       })
 
       // Register git tools via PluginRegistry
       if (ctx.registerTool) {
         // Tools read activeWorkspacePath via closure — route handler
         // sets it before each chat invocation and clears it after.
-        const tools = buildCodingTools(() => activeWorkspacePath)
+        const tools = buildCodingTools(() => {
+          if (workspaceMap.size === 0) return null
+          return [...workspaceMap.values()][0]
+        })
         for (const tool of tools) {
           ctx.registerTool(tool)
         }

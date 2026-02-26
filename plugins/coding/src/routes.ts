@@ -26,7 +26,7 @@ type ChatStreamFn = (
 export interface CodingRouteDeps {
   db: Database.Database
   getChatStream: () => ChatStreamFn | null
-  setActiveWorkspace: (path: string | null) => void
+  setActiveWorkspace: (sessionId: string, path: string | null) => void
 }
 
 // ── SSE Helpers ───────────────────────────────────────────────
@@ -126,17 +126,24 @@ function streamToSse(
   )
 }
 
-// ── Permission Mode Mapping ───────────────────────────────────
+// ── URL Validation ────────────────────────────────────────────
 
-function mapPermissionMode(sessionMode: string): string {
-  switch (sessionMode) {
-    case 'full':
-      return 'bypassPermissions'
-    case 'supervised':
-      return 'acceptEdits'
-    case 'readonly':
-    default:
-      return 'default'
+function validateGitUrl(url: string): string | null {
+  if (url.length > 2048) return 'URL too long'
+  if (/[\x00-\x1f]/.test(url)) return 'URL contains control characters'
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:') return `Protocol ${parsed.protocol} not allowed, use https://`
+    const host = parsed.hostname
+    if (host === 'localhost' || host.startsWith('127.') || host === '::1'
+        || host.startsWith('10.') || host.startsWith('192.168.')
+        || /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+        || host.startsWith('169.254.')) {
+      return 'Internal/private URLs are not allowed'
+    }
+    return null
+  } catch {
+    return 'Invalid URL format'
   }
 }
 
@@ -161,6 +168,11 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
     const validModes = ['full', 'supervised', 'readonly']
     if (body.permissionMode && !validModes.includes(body.permissionMode)) {
       return c.json({ error: `Invalid permissionMode. Must be one of: ${validModes.join(', ')}` }, 400)
+    }
+
+    if (body.gitUrl) {
+      const urlError = validateGitUrl(body.gitUrl)
+      if (urlError) return c.json({ error: urlError }, 400)
     }
 
     try {
@@ -255,9 +267,6 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
     // Build coding-specific system prompt
     const systemPrompt = buildCodingPrompt(session.workspace_path, session.project_name)
 
-    // Map permission mode from session setting to SDK permission mode
-    const permissionMode = mapPermissionMode(session.permission_mode)
-
     // Use a prefixed sessionId to namespace coding sessions in the chat system
     const chatSessionId = `coding:${session.id}`
 
@@ -267,7 +276,7 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
     }
 
     // Activate workspace so registered tools resolve to the correct directory
-    deps.setActiveWorkspace(session.workspace_path)
+    deps.setActiveWorkspace(chatSessionId, session.workspace_path)
 
     const events = chatStream({
       message: body.message,
@@ -276,7 +285,6 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
       cwd: session.workspace_path,
       clientType: 'web',
       systemPrompt,
-      permissionMode,
       model: body.model,
       source: 'user',
     })
@@ -286,7 +294,7 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
       try {
         yield* events
       } finally {
-        deps.setActiveWorkspace(null)
+        deps.setActiveWorkspace(chatSessionId, null)
       }
     })()
 
