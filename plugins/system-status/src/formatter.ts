@@ -22,6 +22,23 @@ export function formatUptime(seconds: number): string {
 }
 
 /**
+ * Format MB value with auto unit (MB / GB / TB).
+ */
+function formatMB(mb: number): string {
+  if (mb >= 1024 * 1024) return `${(mb / 1024 / 1024).toFixed(1)} TB`
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
+  return `${mb} MB`
+}
+
+/**
+ * Format GB value with auto unit (GB / TB).
+ */
+function formatGB(gb: number): string {
+  if (gb >= 1024) return `${(gb / 1024).toFixed(1)} TB`
+  return `${gb} GB`
+}
+
+/**
  * Format timestamp in Asia/Shanghai timezone.
  */
 function formatTimestamp(iso: string): string {
@@ -44,10 +61,10 @@ export function formatMarkdown(report: StatusReport): string {
     const lines = [
       '**System**',
       `- CPU Load: ${cpuLoad[0].toFixed(2)} / ${cpuLoad[1].toFixed(2)} / ${cpuLoad[2].toFixed(2)}`,
-      `- Memory: ${freeMemoryMB} MB free / ${totalMemoryMB} MB total`,
+      `- Memory: ${formatMB(freeMemoryMB)} free / ${formatMB(totalMemoryMB)} total`,
     ]
     for (const disk of disks) {
-      lines.push(`- ${disk.label} (${disk.mount}): ${disk.availGB} GB available`)
+      lines.push(`- ${disk.label} (${disk.mount}): ${formatGB(disk.availGB)} available`)
     }
     sections.push(lines.join('\n'))
   }
@@ -58,7 +75,7 @@ export function formatMarkdown(report: StatusReport): string {
     sections.push([
       '**GPU**',
       `- Utilization: ${utilization}%`,
-      `- Memory: ${memoryUsedGB} / ${memoryTotalGB} GB`,
+      `- Memory: ${formatGB(memoryUsedGB)} / ${formatGB(memoryTotalGB)}`,
       `- Temperature: ${temperatureC}C`,
     ].join('\n'))
   }
@@ -126,9 +143,9 @@ export function formatFeishuCard(report: StatusReport): {
     const { cpuLoad, freeMemoryMB, totalMemoryMB, disks } = report.system
     let content = `**\uD83D\uDCBB \u7CFB\u7EDF**\n`
     content += `CPU Load: ${cpuLoad[0].toFixed(2)} / ${cpuLoad[1].toFixed(2)} / ${cpuLoad[2].toFixed(2)}\n`
-    content += `Memory: ${freeMemoryMB} MB free / ${totalMemoryMB} MB total`
+    content += `Memory: ${formatMB(freeMemoryMB)} free / ${formatMB(totalMemoryMB)} total`
     for (const disk of disks) {
-      content += `\n${disk.label} (${disk.mount}): ${disk.availGB} GB available`
+      content += `\n${disk.label} (${disk.mount}): ${formatGB(disk.availGB)} available`
     }
     elements.push({ tag: 'markdown', content })
     elements.push({ tag: 'hr' })
@@ -140,7 +157,7 @@ export function formatFeishuCard(report: StatusReport): {
     const content = [
       `**\uD83C\uDFAE GPU**`,
       `Utilization: ${utilization}%`,
-      `Memory: ${memoryUsedGB} / ${memoryTotalGB} GB`,
+      `Memory: ${formatGB(memoryUsedGB)} / ${formatGB(memoryTotalGB)}`,
       `Temperature: ${temperatureC}\u00B0C`,
     ].join('\n')
     elements.push({ tag: 'markdown', content })
