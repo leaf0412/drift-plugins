@@ -300,8 +300,10 @@ export async function collectDrift(port?: number, authToken?: string): Promise<D
 
     let agentCount = 0
     if (agentsRes.ok) {
-      const agentsData = await agentsRes.json() as unknown[]
-      agentCount = Array.isArray(agentsData) ? agentsData.length : 0
+      const agentsData = await agentsRes.json() as { agents?: unknown[] } | unknown[]
+      // API returns { agents: [...] } or bare array
+      const list = Array.isArray(agentsData) ? agentsData : (agentsData as { agents?: unknown[] }).agents
+      agentCount = Array.isArray(list) ? list.length : 0
     }
 
     return { uptimeSeconds, agentCount }
