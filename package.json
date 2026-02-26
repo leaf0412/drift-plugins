@@ -10,6 +10,7 @@
   "devDependencies": {
     "@drift/core": "link:../drift/packages/core",
     "@drift/plugins": "link:../drift/packages/plugins",
+    "@larksuiteoapi/node-sdk": "^1.59.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
     "better-sqlite3": "^12.6.2",
