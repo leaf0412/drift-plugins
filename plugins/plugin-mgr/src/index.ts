@@ -277,19 +277,23 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
 
 // ── Plugin Factory ────────────────────────────────────────────
 
-export function createPluginMgrPlugin(options: PluginMgrOptions): DriftPlugin {
+export function createPluginMgrPlugin(options?: PluginMgrOptions): DriftPlugin {
+  const opts: PluginMgrOptions = options ?? {
+    pluginsDir: join(process.env.DRIFT_DATA_DIR || join(process.env.HOME || '/tmp', '.drift'), 'plugins'),
+    builtinNames: [],
+  }
   return {
     manifest,
 
     async init(ctx: PluginContext) {
       // Ensure plugins directory exists
-      if (!existsSync(options.pluginsDir)) {
-        mkdirSync(options.pluginsDir, { recursive: true })
+      if (!existsSync(opts.pluginsDir)) {
+        mkdirSync(opts.pluginsDir, { recursive: true })
       }
 
       // Register tools via ctx.registerTool if available
       if (ctx.registerTool) {
-        const tools = buildTools(options, ctx.events)
+        const tools = buildTools(opts, ctx.events)
         for (const tool of tools) {
           ctx.registerTool(tool)
         }

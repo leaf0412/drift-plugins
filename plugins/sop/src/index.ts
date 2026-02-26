@@ -166,8 +166,9 @@ function buildSopTools(
 
 // ── Plugin Factory ────────────────────────────────────────────
 
-export function createSopPlugin(mindDir: string): DriftPlugin {
-  const sopDir = join(mindDir, 'sops')
+export function createSopPlugin(mindDir?: string): DriftPlugin {
+  const resolvedMindDir = mindDir || join(process.env.DRIFT_DATA_DIR || join(process.env.HOME || '/tmp', '.drift'), 'mind')
+  const sopDir = join(resolvedMindDir, 'sops')
   let registry = new Map<string, Sop>()
   const executor = new SopExecutor()
 
