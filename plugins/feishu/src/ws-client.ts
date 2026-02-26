@@ -44,6 +44,7 @@ interface FeishuMessageEvent {
     chat_type: string
     message_type: string
     content: string
+    create_time?: string // Unix timestamp in ms
     mentions?: Array<{ key: string; id: { open_id?: string }; name: string }>
   }
 }
@@ -59,6 +60,7 @@ export class FeishuWsClient {
   private wsClient: lark.WSClient | null = null
   private apiClient: lark.Client | null = null
   private processedEvents = new Map<string, number>()
+  private startedAt = 0 // reject messages created before this
   private config: FeishuWsConfig
   private deps: FeishuWsDeps
 
@@ -70,6 +72,8 @@ export class FeishuWsClient {
   // ── Lifecycle ────────────────────────────────────────
 
   start(): void {
+    this.startedAt = Date.now()
+
     const baseConfig = {
       appId: this.config.appId,
       appSecret: this.config.appSecret,
@@ -162,10 +166,17 @@ export class FeishuWsClient {
     const contentStr = msg.content
     const senderId = sender.sender_id?.open_id
 
-    // Event de-duplication
+    // Event de-duplication (in-memory, cleared on restart)
     if (this.processedEvents.has(messageId)) return
     this.processedEvents.set(messageId, Date.now())
     this.pruneProcessedEvents()
+
+    // Reject stale messages replayed by Feishu after restart
+    const createTimeMs = msg.create_time ? Number(msg.create_time) : 0
+    if (createTimeMs > 0 && createTimeMs < this.startedAt) {
+      this.deps.logger.info(`Feishu bot: skipped stale message ${messageId} (created ${Math.round((this.startedAt - createTimeMs) / 1000)}s before start)`)
+      return
+    }
 
     // Allow-list check (empty list = allow all)
     if (allowFrom.length > 0 && senderId && !allowFrom.includes(senderId)) {
