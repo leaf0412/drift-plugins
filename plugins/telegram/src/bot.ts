@@ -62,8 +62,8 @@ export class TelegramBot {
   private offset = 0
   private startedAt = 0
   private processedUpdates = new Map<number, number>()
-  /** Track whether sendMessageDraft is supported (may not be on older Bot API) */
-  private draftSupported = true
+  /** sendMessageDraft requires Bot API 9.3+ with forum topic mode; default to edit mode */
+  private draftSupported = false
 
   constructor(config: TelegramBotConfig, deps: TelegramBotDeps) {
     this.config = config
@@ -253,6 +253,8 @@ export class TelegramBot {
           await this.api.sendMessageDraft(chatId, draftId, draftText).catch(() => {})
         }
         lastDraftAt = now
+      } else if (event.type === 'error') {
+        accumulated += `\n\n❌ ${event.error || 'Unknown error'}`
       }
     }
 
@@ -297,6 +299,8 @@ export class TelegramBot {
           lastEditedText = editText
           await this.api.editMessageText(chatId, messageId, editText).catch(() => {})
         }
+      } else if (event.type === 'error') {
+        accumulated += `\n\n❌ ${event.error || 'Unknown error'}`
       }
     }
 
@@ -323,6 +327,8 @@ export class TelegramBot {
     for await (const event of this.deps.chatHandle(inbound)) {
       if (event.type === 'delta' && event.content) {
         accumulated += event.content
+      } else if (event.type === 'error') {
+        accumulated += `\n\n❌ ${event.error || 'Unknown error'}`
       }
     }
 

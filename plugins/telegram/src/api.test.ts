@@ -46,10 +46,10 @@ describe('TelegramApi', () => {
   const TOKEN = 'test-bot-token'
   const api = new TelegramApi(TOKEN)
 
-  it('constructs correct base URL', () => {
+  it('constructs correct base URL', async () => {
     const mock = mockFetchOk(true)
 
-    api.deleteWebhook()
+    await api.deleteWebhook()
 
     const calledUrl = mock.mock.calls[0][0] as string
     expect(calledUrl).toBe(`https://api.telegram.org/bot${TOKEN}/deleteWebhook`)
