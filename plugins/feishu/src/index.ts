@@ -9,6 +9,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { sendFeishuWebhook, sendFeishuText } from './webhook.js'
 import { FeishuWsClient } from './ws-client.js'
+import { WebhookSendQueue } from './send-queue.js'
 import type { FeishuWsConfig } from './ws-client.js'
 import { getStorageDb, getChatHandle, deleteSession, deleteSessionsByPrefix } from '@drift/plugins'
 
@@ -74,6 +75,7 @@ export function createFeishuPlugin(options?: FeishuPluginOptions): DriftPlugin {
   // When loaded as external plugin (no args), read config from $DRIFT_DATA_DIR/config.json
   const opts: FeishuPluginOptions = options ?? readFeishuConfigFromFile()
   let wsClient: FeishuWsClient | null = null
+  let sendQueue: WebhookSendQueue | null = null
   let savedCtx: PluginContext | null = null
 
   return {
@@ -81,7 +83,9 @@ export function createFeishuPlugin(options?: FeishuPluginOptions): DriftPlugin {
 
     async init(ctx: PluginContext) {
       savedCtx = ctx
+      sendQueue = new WebhookSendQueue(ctx.logger)
 
+      const queue = sendQueue
       const feishuChannel: Channel = {
         name: 'feishu',
         capabilities: {
@@ -93,20 +97,25 @@ export function createFeishuPlugin(options?: FeishuPluginOptions): DriftPlugin {
 
         async send(msg: OutgoingMessage) {
           if (!opts.webhookUrl) return  // WebSocket-only mode, no outbound webhook
+          const url = opts.webhookUrl
+          const secret = opts.secret
+
           if (msg.type === 'card' && msg.metadata?.card) {
-            await sendFeishuWebhook(
-              opts.webhookUrl,
-              msg.metadata.card as { msg_type: 'interactive'; card: Record<string, unknown> },
-              opts.secret,
+            queue.enqueue(() =>
+              sendFeishuWebhook(
+                url,
+                msg.metadata!.card as { msg_type: 'interactive'; card: Record<string, unknown> },
+                secret,
+              ),
             )
           } else {
-            await sendFeishuText(opts.webhookUrl, msg.content, opts.secret)
+            queue.enqueue(() => sendFeishuText(url, msg.content, secret))
           }
         },
       }
 
       ctx.channels.register(feishuChannel)
-      ctx.logger.info('Feishu channel registered')
+      ctx.logger.info('Feishu channel registered (rate-limited send queue enabled)')
     },
 
     async start() {
@@ -127,6 +136,10 @@ export function createFeishuPlugin(options?: FeishuPluginOptions): DriftPlugin {
     },
 
     async stop() {
+      if (sendQueue) {
+        sendQueue.stop()
+        sendQueue = null
+      }
       if (wsClient) {
         wsClient.stop()
         wsClient = null
@@ -152,3 +165,5 @@ export {
 export type { FeishuMessage } from './webhook.js'
 export { FeishuWsClient } from './ws-client.js'
 export type { FeishuWsConfig, FeishuWsDeps, ChatHandleFn as FeishuChatHandleFn } from './ws-client.js'
+export { WebhookSendQueue } from './send-queue.js'
+export type { SendQueueOptions, SendQueueLogger } from './send-queue.js'
