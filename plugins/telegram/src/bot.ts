@@ -32,10 +32,10 @@ export interface TelegramBotDeps {
 }
 
 interface BotLogger {
-  info: (msg: string, ...args: unknown[]) => void
-  warn: (msg: string, ...args: unknown[]) => void
-  error: (msg: string, ...args: unknown[]) => void
-  debug: (msg: string, ...args: unknown[]) => void
+  info(msg: string, data?: Record<string, unknown>): void
+  warn(msg: string, data?: Record<string, unknown>): void
+  error(msg: string, errorOrData?: Error | Record<string, unknown>): void
+  debug(msg: string, data?: Record<string, unknown>): void
 }
 
 interface InboundMessage {
@@ -102,7 +102,7 @@ export class TelegramBot {
           this.deps.logger.warn(`Telegram bot: rate limited, waiting ${err.retryAfter}s`)
           await sleep(err.retryAfter * 1000)
         } else {
-          this.deps.logger.error('Telegram bot: polling error', err)
+          this.deps.logger.error('Telegram bot: polling error', err instanceof Error ? err : undefined)
           await sleep(3000)
         }
       }
@@ -183,7 +183,7 @@ export class TelegramBot {
         await this.handleGroupChat(chatId, inbound)
       }
     } catch (err) {
-      this.deps.logger.error('Telegram bot: chat error', err)
+      this.deps.logger.error('Telegram bot: chat error', err instanceof Error ? err : undefined)
       await this.api.sendMessage(chatId, '处理消息时出错，请稍后重试').catch(() => {})
     }
   }

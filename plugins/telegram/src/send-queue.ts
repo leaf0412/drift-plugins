@@ -17,8 +17,8 @@ export interface SendQueueOptions {
 }
 
 export interface SendQueueLogger {
-  warn: (msg: string, ...args: unknown[]) => void
-  error: (msg: string, ...args: unknown[]) => void
+  warn(msg: string, data?: Record<string, unknown>): void
+  error(msg: string, errorOrData?: Error | Record<string, unknown>): void
 }
 
 export class TelegramSendQueue {
