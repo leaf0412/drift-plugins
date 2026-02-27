@@ -4,3 +4,16 @@ type: code
 depends:
   - storage
   - http
+config:
+  apiKey:
+    type: string
+    description: "OpenAI-compatible API key for embedding service"
+    required: true
+  baseURL:
+    type: string
+    description: "Embedding API base URL"
+    default: "https://api.openai.com/v1"
+  model:
+    type: string
+    description: "Embedding model name"
+    default: "text-embedding-3-small"

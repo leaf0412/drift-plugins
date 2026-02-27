@@ -2,3 +2,22 @@ name: system-status
 version: 1.0.0
 type: code
 depends: []
+config:
+  interval:
+    type: string
+    description: "Cron expression for status check interval"
+    default: "*/30 * * * *"
+  claudeOauthToken:
+    type: string
+    description: "Claude OAuth token for API credit check"
+  diskPaths:
+    type: object
+    description: "Mount point to label mapping"
+    default: { "/": "系统盘" }
+  daemonPort:
+    type: number
+    description: "Drift daemon port"
+    default: 3141
+  daemonAuthToken:
+    type: string
+    description: "Drift daemon auth token (fallback to DRIFT_AUTH_TOKEN env)"

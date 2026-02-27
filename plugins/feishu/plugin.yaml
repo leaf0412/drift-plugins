@@ -5,3 +5,19 @@ depends:
   - chat
   - channel
   - storage
+config:
+  webhookUrl:
+    type: string
+    description: "飞书 Webhook URL for outbound messages"
+  webhookSecret:
+    type: string
+    description: "飞书 Webhook signing secret"
+  appId:
+    type: string
+    description: "飞书 App ID for WebSocket inbound"
+  appSecret:
+    type: string
+    description: "飞书 App Secret for WebSocket inbound"
+  allowFrom:
+    type: string[]
+    description: "Allowed sender open_id list (empty = allow all)"
