@@ -113,17 +113,18 @@ describe('TelegramApi', () => {
   })
 
   describe('sendMessageDraft', () => {
-    it('sends with force_reply markup', async () => {
+    it('calls sendMessageDraft endpoint with business_connection_id', async () => {
       const mock = mockFetchOk(true)
 
       const result = await api.sendMessageDraft(123, 'draft-1', 'Draft text')
 
       expect(result).toBe(true)
+      const [url] = mock.mock.calls[0]
+      expect(url).toBe(`https://api.telegram.org/bot${TOKEN}/sendMessageDraft`)
       const body = JSON.parse(mock.mock.calls[0][1].body)
       expect(body.chat_id).toBe(123)
       expect(body.text).toBe('Draft text')
-      expect(body.reply_markup.force_reply).toBe(true)
-      expect(body.reply_markup.input_field_placeholder).toBe('draft-1')
+      expect(body.business_connection_id).toBe('draft-1')
     })
   })
 
