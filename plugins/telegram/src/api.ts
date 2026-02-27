@@ -118,11 +118,11 @@ export class TelegramApi {
     text: string,
     parseMode?: string,
   ): Promise<true> {
-    return this.call<true>('sendMessage', {
+    return this.call<true>('sendMessageDraft', {
       chat_id: chatId,
+      business_connection_id: draftId,
       text,
       ...(parseMode && { parse_mode: parseMode }),
-      reply_markup: { force_reply: true, input_field_placeholder: draftId },
     })
   }
 
