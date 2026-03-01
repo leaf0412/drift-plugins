@@ -2,33 +2,21 @@
 
 import type {
   DriftPlugin,
-  PluginManifest,
   PluginContext,
   Channel,
   OutgoingMessage,
 } from '@drift/core'
-import type { Context } from 'hono'
+import type { Context, Hono } from 'hono'
+import type Database from 'better-sqlite3'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { getStorageDb, getChatHandle, deleteSession, deleteSessionsByPrefix } from '@drift/plugins'
+import { deleteSession, deleteSessionsByPrefix } from '@drift/plugins'
+import type { InboundMessage, ChatEvent } from '@drift/plugins'
 import { TelegramBot } from './bot.js'
 import { TelegramApi } from './api.js'
 import { TelegramSendQueue } from './send-queue.js'
 import { truncate } from './html.js'
 import type { TelegramUpdate } from './api.js'
-
-// ── Manifest ──────────────────────────────────────────────
-
-const manifest: PluginManifest = {
-  name: 'telegram',
-  version: '1.0.0',
-  type: 'code',
-  capabilities: {
-    events: { listen: ['chat.complete', 'cron.chat'] },
-    network: true,
-  },
-  depends: ['chat', 'channel', 'storage'],
-}
 
 // ── Options ───────────────────────────────────────────────
 
@@ -60,19 +48,72 @@ function readTelegramConfigFromFile(): TelegramPluginOptions {
   } catch { return {} }
 }
 
+// ── Context helpers ──────────────────────────────────────
+
+type AnyCtx = PluginContext & Record<string, unknown>
+
+function registerChannelCapability(ctx: AnyCtx, capabilityName: string, ch: Channel): void {
+  if (typeof ctx['register'] === 'function') {
+    ;(ctx['register'] as (n: string, h: () => unknown) => void)(capabilityName, () => ch)
+  } else if (ctx['channels'] && typeof (ctx['channels'] as Record<string, unknown>)['register'] === 'function') {
+    ;((ctx['channels'] as Record<string, unknown>)['register'] as (ch: Channel) => void)(ch)
+  }
+}
+
+async function getDb(ctx: AnyCtx): Promise<Database.Database> {
+  if (typeof ctx['call'] === 'function') {
+    return (ctx['call'] as <T>(cap: string) => Promise<T>)<Database.Database>('sqlite.db')
+  }
+  const atoms = ctx['atoms'] as { atom<T>(k: string, d: T): { deref(): T } } | undefined
+  const db = atoms?.atom<Database.Database | null>('storage.db', null)?.deref()
+  if (!db) throw new Error('Storage plugin not initialized')
+  return db
+}
+
+async function getChatHandleFn(ctx: AnyCtx): Promise<(msg: InboundMessage) => AsyncIterable<ChatEvent>> {
+  if (typeof ctx['call'] === 'function') {
+    return (ctx['call'] as <T>(cap: string) => Promise<T>)<(msg: InboundMessage) => AsyncIterable<ChatEvent>>('chat.handle')
+  }
+  const atoms = ctx['atoms'] as { atom<T>(k: string, d: T): { deref(): T } } | undefined
+  const fn = atoms?.atom<((msg: InboundMessage) => AsyncIterable<ChatEvent>) | null>('chat.handle', null)?.deref()
+  if (!fn) throw new Error('Chat plugin not initialized')
+  return fn
+}
+
+async function getHttpAppFromCtx(ctx: AnyCtx): Promise<Hono> {
+  if (typeof ctx['call'] === 'function') {
+    const pluginId = ctx['pluginId'] as string | undefined
+    return (ctx['call'] as <T>(cap: string, data?: unknown) => Promise<T>)<Hono>('http.app', { pluginId })
+  }
+  const atoms = ctx['atoms'] as { atom<T>(k: string, d: T): { deref(): T } } | undefined
+  const app = atoms?.atom<Hono | null>('http.app', null)?.deref()
+  if (!app) throw new Error('HTTP plugin not initialized')
+  return app
+}
+
 // ── Plugin Factory ────────────────────────────────────────
 
 export function createTelegramPlugin(options?: TelegramPluginOptions): DriftPlugin {
   const opts: TelegramPluginOptions = options ?? readTelegramConfigFromFile()
   let bot: TelegramBot | null = null
   let sendQueue: TelegramSendQueue | null = null
-  let savedCtx: PluginContext | null = null
+  let savedCtx: AnyCtx | null = null
 
   return {
-    manifest,
+    name: 'telegram',
+    manifest: {
+      name: 'telegram',
+      version: '1.0.0',
+      type: 'code',
+      capabilities: {
+        events: { listen: ['chat.complete', 'cron.chat'] },
+        network: true,
+      },
+      depends: ['chat', 'channel', 'storage'],
+    },
 
     async init(ctx: PluginContext) {
-      savedCtx = ctx
+      savedCtx = ctx as AnyCtx
 
       if (!opts.botToken) {
         ctx.logger.warn('Telegram plugin: no botToken configured, skipping')
@@ -85,7 +126,7 @@ export function createTelegramPlugin(options?: TelegramPluginOptions): DriftPlug
       const queue = sendQueue
       const notifyChatId = opts.chatId
 
-      // Register Channel for notify broadcasts (outbound only)
+      // Register Channel capability for notify broadcasts (outbound only)
       // notify plugin sends { type: 'text', content: formattedText, metadata: { event } }
       // content is already pre-formatted by notify, so we use it directly
       const telegramChannel: Channel = {
@@ -104,7 +145,7 @@ export function createTelegramPlugin(options?: TelegramPluginOptions): DriftPlug
         },
       }
 
-      ctx.channels.register(telegramChannel)
+      registerChannelCapability(ctx as AnyCtx, 'channel.telegram', telegramChannel)
       ctx.logger.info('Telegram channel registered (rate-limited send queue enabled)')
     },
 
@@ -112,8 +153,8 @@ export function createTelegramPlugin(options?: TelegramPluginOptions): DriftPlug
       if (!opts.botToken || !savedCtx) return
 
       const ctx = savedCtx
-      const db = getStorageDb(ctx)
-      const chatHandle = getChatHandle(ctx)
+      const db = await getDb(ctx)
+      const chatHandle = await getChatHandleFn(ctx)
 
       bot = new TelegramBot(
         {
@@ -140,7 +181,8 @@ export function createTelegramPlugin(options?: TelegramPluginOptions): DriftPlug
           .catch(err => ctx.logger.error('Telegram: failed to set webhook', err))
 
         const secret = opts.webhookSecret
-        ctx.routes.post('/api/telegram/webhook', async (c: Context) => {
+        const app = await getHttpAppFromCtx(ctx)
+        app.post('/api/telegram/webhook', async (c: Context) => {
           if (secret) {
             const headerSecret = c.req.header('x-telegram-bot-api-secret-token')
             if (headerSecret !== secret) {
@@ -175,7 +217,7 @@ export function createTelegramPlugin(options?: TelegramPluginOptions): DriftPlug
         bot = null
       }
     },
-  }
+  } as DriftPlugin
 }
 
 export default createTelegramPlugin

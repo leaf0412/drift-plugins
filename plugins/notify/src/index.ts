@@ -1,29 +1,15 @@
-import type { DriftPlugin, PluginManifest, PluginContext } from '@drift/core'
-import { getStorageDb, getHttpApp } from '@drift/plugins'
+import type { DriftPlugin, PluginContext } from '@drift/core'
+import type Database from 'better-sqlite3'
+import type { Hono } from 'hono'
+import type { Channel } from '@drift/core'
 import { logNotification, listNotifications } from './notification-log.js'
 import { registerNotifyRoutes } from './routes.js'
 import { logEvent } from './event-log.js'
-import type { EventLogInput } from './event-log.js'
+import type { EventLogInput, EventLogEntry } from './event-log.js'
 
-// ── Manifest ──────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────
 
-const manifest: PluginManifest = {
-  name: 'notify',
-  version: '1.0.0',
-  type: 'code',
-  capabilities: {
-    events: {
-      listen: ['chat.complete', 'cron.result', 'cron.notify', 'cron.chat', 'task.reminder'],
-    },
-  },
-  depends: ['storage', 'http'],
-}
-
-// ── Atom Key ──────────────────────────────────────────────
-
-const EVENT_LOG_ATOM = 'event.log'
-
-type LogEventFn = (input: EventLogInput) => import('./event-log.js').EventLogEntry
+type LogEventFn = (input: EventLogInput) => EventLogEntry
 
 // ── Event Formatting ─────────────────────────────────────
 
@@ -53,6 +39,77 @@ function formatEventContent(event: string, data: unknown): string {
   return JSON.stringify(data)
 }
 
+// ── Known event list ──────────────────────────────────────
+
+const SUBSCRIBED_EVENTS = ['chat.complete', 'cron.result', 'cron.notify', 'cron.chat', 'task.reminder'] as const
+
+// ── Context helpers ──────────────────────────────────────
+
+type AnyCtx = PluginContext & Record<string, unknown>
+
+async function getDbFromCtx(ctx: AnyCtx): Promise<Database.Database> {
+  if (typeof ctx['call'] === 'function') {
+    return (ctx['call'] as <T>(cap: string) => Promise<T>)<Database.Database>('sqlite.db')
+  }
+  const atoms = ctx['atoms'] as { atom<T>(k: string, d: T): { deref(): T } } | undefined
+  const db = atoms?.atom<Database.Database | null>('storage.db', null)?.deref()
+  if (!db) throw new Error('Storage plugin not initialized')
+  return db
+}
+
+async function getHttpFromCtx(ctx: AnyCtx): Promise<Hono> {
+  if (typeof ctx['call'] === 'function') {
+    const pluginId = ctx['pluginId'] as string | undefined
+    return (ctx['call'] as <T>(cap: string, data?: unknown) => Promise<T>)<Hono>('http.app', { pluginId })
+  }
+  const atoms = ctx['atoms'] as { atom<T>(k: string, d: T): { deref(): T } } | undefined
+  const app = atoms?.atom<Hono | null>('http.app', null)?.deref()
+  if (!app) throw new Error('HTTP plugin not initialized')
+  return app
+}
+
+function subscribeEvent(ctx: AnyCtx, event: string, handler: (data: unknown) => Promise<void>): () => void {
+  // New-style kernel context: ctx.on(event, handler)
+  if (typeof ctx['on'] === 'function') {
+    return (ctx['on'] as (event: string, handler: (data: unknown) => void) => () => void)(event, handler)
+  }
+  // Old-style external-kernel context: ctx.events.on(event, handler)
+  const events = ctx['events'] as { on(event: string, handler: (data: unknown) => void): () => void } | undefined
+  if (events && typeof events.on === 'function') {
+    return events.on(event, handler)
+  }
+  return () => {}
+}
+
+async function getChannels(ctx: AnyCtx): Promise<Channel[]> {
+  if (typeof ctx['call'] === 'function') {
+    return (ctx['call'] as <T>(cap: string) => Promise<T>)<Channel[]>('channel.list').catch(() => [] as Channel[])
+  }
+  const channels = ctx['channels'] as { list(): Channel[] } | undefined
+  return channels?.list() ?? []
+}
+
+async function getChannelByName(ctx: AnyCtx, name: string): Promise<Channel | null> {
+  if (typeof ctx['call'] === 'function') {
+    return (ctx['call'] as <T>(cap: string) => Promise<T>)<Channel>('channel.' + name).catch(() => null)
+  }
+  const channels = ctx['channels'] as { get(name: string): Channel | undefined } | undefined
+  return channels?.get(name) ?? null
+}
+
+function publishEventLogCapability(ctx: AnyCtx, fn: LogEventFn): void {
+  if (typeof ctx['register'] === 'function') {
+    ;(ctx['register'] as (name: string, handler: (data: unknown) => unknown) => void)('event.log', (data: unknown) => fn(data as EventLogInput))
+  } else {
+    // Old-style: publish via atom
+    const atoms = ctx['atoms'] as { atom<T>(k: string, d: T): { reset(v: T): T } } | undefined
+    if (atoms) {
+      atoms.atom<LogEventFn>('event.log', (() => { throw new Error('event.log not initialized') }) as unknown as LogEventFn)
+        .reset(fn)
+    }
+  }
+}
+
 // ── Plugin Factory ────────────────────────────────────────
 
 /**
@@ -61,31 +118,45 @@ function formatEventContent(event: string, data: unknown): string {
  * On each subscribed event, broadcasts the payload to every registered Channel
  * and logs success/failure to the notification_log table.
  *
- * Publishes the `event.log` atom so other plugins can log events.
+ * Publishes the `event.log` capability so other plugins can log events.
  */
 export function createNotifyPlugin(): DriftPlugin {
   const unsubs: Array<() => void> = []
 
   return {
-    manifest,
+    name: 'notify',
+    manifest: {
+      name: 'notify',
+      version: '1.0.0',
+      type: 'code',
+      capabilities: {
+        events: {
+          listen: ['chat.complete', 'cron.result', 'cron.notify', 'cron.chat', 'task.reminder'],
+        },
+      },
+      depends: ['storage', 'http'],
+    },
 
     async init(ctx: PluginContext) {
-      const db = getStorageDb(ctx)
-      const app = getHttpApp(ctx)
+      const anyCtx = ctx as AnyCtx
+      const db = await getDbFromCtx(anyCtx)
+      const app = await getHttpFromCtx(anyCtx)
 
-      // Publish event.log atom
+      // Publish event.log capability (new-style: ctx.register; old-style: atoms)
       const logEventFn: LogEventFn = (input) => logEvent(db, input)
-      ctx.atoms
-        .atom<LogEventFn>(EVENT_LOG_ATOM, (() => { throw new Error('event.log not initialized') }) as unknown as LogEventFn)
-        .reset(logEventFn)
+      publishEventLogCapability(anyCtx, logEventFn)
 
       // Register HTTP routes
       registerNotifyRoutes(app, {
         db,
         sendNotify: async (title: string, body: string, channelName?: string) => {
-          const targets = channelName
-            ? (() => { const ch = ctx.channels.get(channelName); return ch ? [ch] : [] })()
-            : ctx.channels.list()
+          let targets: Channel[]
+          if (channelName) {
+            const ch = await getChannelByName(anyCtx, channelName)
+            targets = ch ? [ch] : []
+          } else {
+            targets = await getChannels(anyCtx)
+          }
           if (targets.length === 0) {
             throw new Error('No notification channels configured')
           }
@@ -99,11 +170,9 @@ export function createNotifyPlugin(): DriftPlugin {
         },
       })
 
-      const events = manifest.capabilities.events!.listen!
-
-      for (const event of events) {
-        const unsub = ctx.events.on(event, async (data) => {
-          const channels = ctx.channels.list()
+      for (const event of SUBSCRIBED_EVENTS) {
+        const unsub = subscribeEvent(anyCtx, event, async (data) => {
+          const channels = await getChannels(anyCtx)
           for (const channel of channels) {
             const obj = data as Record<string, unknown> | undefined
             const title = obj?.jobName as string ?? obj?.title as string ?? event
@@ -141,19 +210,26 @@ export function createNotifyPlugin(): DriftPlugin {
       for (const unsub of unsubs) unsub()
       unsubs.length = 0
     },
-  }
+  } as DriftPlugin
 }
 
-// ── Atom Accessor ────────────────────────────────────────
+// ── Capability Accessor ───────────────────────────────────
 
 /**
- * Retrieve the event logger function from the atom registry.
+ * Retrieve the event logger function via the capability system.
  * The notify plugin must be initialized before calling this.
+ * New-style: uses ctx.call('event.log'); old-style: reads from atom.
  */
-export function getEventLogger(ctx: PluginContext): LogEventFn {
-  return ctx.atoms
-    .atom<LogEventFn>(EVENT_LOG_ATOM, (() => { throw new Error('event.log not initialized') }) as unknown as LogEventFn)
-    .deref()
+export async function getEventLogger(ctx: PluginContext): Promise<LogEventFn> {
+  const anyCtx = ctx as AnyCtx
+  if (typeof anyCtx['call'] === 'function') {
+    return (anyCtx['call'] as <T>(cap: string) => Promise<T>)<LogEventFn>('event.log')
+  }
+  // Old-style: read from atom
+  const atoms = anyCtx['atoms'] as { atom<T>(k: string, d: T): { deref(): T } } | undefined
+  const fn = atoms?.atom<LogEventFn>('event.log', (() => { throw new Error('event.log not initialized') }) as unknown as LogEventFn)?.deref()
+  if (!fn) throw new Error('event.log not initialized')
+  return fn
 }
 
 // ── Re-exports ────────────────────────────────────────────

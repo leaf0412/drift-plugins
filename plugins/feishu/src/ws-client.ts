@@ -8,7 +8,7 @@
 import { homedir } from 'node:os'
 import * as lark from '@larksuiteoapi/node-sdk'
 import type { InboundMessage, ChatEvent } from '@drift/plugins'
-import type { LoggerLike } from '@drift/core'
+import type { LoggerLike } from '@drift/core/kernel'
 
 // ── Config & Deps ────────────────────────────────────────
 
