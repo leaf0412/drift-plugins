@@ -17,27 +17,24 @@ let channelPluginRef: ReturnType<typeof createChannelPlugin> | null = null
 
 async function initChannelPlugin(): Promise<ChannelRouter> {
   channelPluginRef = createChannelPlugin()
-  const services = new Map<string, Function>()
   const app = new Hono()
   const db = new Database(':memory:')
   const channelCtx = {
     pluginId: 'channel',
     logger: makeLogger(),
-    register: vi.fn((key: string, handler: Function) => { services.set(key, handler) }),
+    register: vi.fn(),
     call: vi.fn(async (key: string, ..._args: unknown[]) => {
       if (key === 'http.app') return app
       if (key === 'sqlite.db') return db
-      const handler = services.get(key)
-      if (handler) return handler()
       throw new Error(`Service not found: ${key}`)
     }),
     emit: vi.fn(async () => {}),
     on: vi.fn(() => () => {}),
   } as unknown as PluginContext
   await channelPluginRef.init!(channelCtx)
-  // The router is now in the module-level _routerRegistry
-  const routerHandler = services.get('channel.router') as Function
-  return routerHandler() as ChannelRouter
+  // capabilities are now declarative on the plugin object
+  const routerHandler = channelPluginRef.capabilities!['channel.router']
+  return routerHandler(undefined, undefined) as ChannelRouter
 }
 
 function makeContext(logger: LoggerLike): PluginContext & { _router: ChannelRouter } {
