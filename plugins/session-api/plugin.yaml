@@ -1,6 +1,0 @@
-name: session-api
-version: 1.0.0
-type: code
-depends:
-  - storage
-  - http

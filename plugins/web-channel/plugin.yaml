@@ -1,7 +1,0 @@
-name: web-channel
-version: 1.0.0
-type: code
-depends:
-  - channel
-  - http
-  - chat

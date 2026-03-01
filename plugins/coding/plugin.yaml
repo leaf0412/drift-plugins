@@ -1,7 +1,0 @@
-name: coding
-version: 1.0.0
-type: code
-depends:
-  - storage
-  - http
-  - chat
