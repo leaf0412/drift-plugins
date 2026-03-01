@@ -13,19 +13,22 @@ const _hooksRegistry = new Map<string, HookPipeline>()
 // ── Plugin Factory ────────────────────────────────────────────
 
 export function createChannelPlugin(): DriftPlugin {
+  let router: ChannelRouter
+  let hooks: HookPipeline
+
   return {
     name: 'channel',
+    requiresCapabilities: ['sqlite.db', 'http.app'],
+    capabilities: {
+      'channel.router': () => router,
+      'channel.hooks': () => hooks,
+    },
 
     async init(ctx: PluginContext) {
-      const router = new ChannelRouter()
-
-      // Register ChannelRouter as a capability
-      ctx.register('channel.router', () => router)
+      router = new ChannelRouter()
       _routerRegistry.set(ctx.pluginId, router)
 
-      // Initialize hook pipeline
-      const hooks = new HookPipeline()
-      ctx.register('channel.hooks', () => hooks)
+      hooks = new HookPipeline()
       _hooksRegistry.set(ctx.pluginId, hooks)
 
       // Register pairing API routes

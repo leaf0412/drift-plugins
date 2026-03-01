@@ -93,7 +93,7 @@ describe('createSopPlugin', () => {
     expect(existsSync(join(newMindDir, 'sops'))).toBe(true)
   })
 
-  it('loads SOP files on init and exposes via ctx.register', async () => {
+  it('loads SOP files on init and exposes via declarative capabilities', async () => {
     writeSopMd(sopDir, 'morning-check.md', SIMPLE_SOP)
 
     const logger = makeLogger()
@@ -101,7 +101,9 @@ describe('createSopPlugin', () => {
     const plugin = createSopPlugin(mindDir)
     await plugin.init!(ctx)
 
-    const registry = await ctx.call<Map<string, unknown>>('sop.registry')
+    // capabilities are now declarative on the plugin object
+    const handler = plugin.capabilities!['sop.registry']
+    const registry = handler(undefined, undefined) as Map<string, unknown>
     expect(registry.size).toBe(1)
     expect(registry.has('morning-check')).toBe(true)
   })

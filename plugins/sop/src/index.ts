@@ -162,6 +162,9 @@ export function createSopPlugin(mindDir?: string): DriftPlugin {
   return {
     name: 'sop',
     tools: buildSopTools(() => registry, () => executor),
+    capabilities: {
+      'sop.registry': () => registry,
+    },
 
     async init(ctx: PluginContext) {
       // Ensure sops directory exists
@@ -172,9 +175,6 @@ export function createSopPlugin(mindDir?: string): DriftPlugin {
       // Load SOPs
       registry = loadSopsFromDir(sopDir, ctx.logger)
       ctx.logger.info(`SOP plugin initialized: ${registry.size} SOP(s) loaded`)
-
-      // Publish registry as a capability (non-tool)
-      ctx.register('sop.registry', () => registry)
 
       ctx.logger.debug(`SOP: ${buildSopTools(() => registry, () => executor).length} tools declared`)
     },

@@ -55,17 +55,18 @@ const SUBSCRIBED_EVENTS = ['chat.complete', 'cron.result', 'cron.notify', 'cron.
  */
 export function createNotifyPlugin(): DriftPlugin {
   const unsubs: Array<() => void> = []
+  let db: Database.Database | null = null
 
   return {
     name: 'notify',
+    requiresCapabilities: ['sqlite.db', 'http.app'],
+    capabilities: {
+      'event.log': (data) => logEvent(db!, data as EventLogInput),
+    },
 
     async init(ctx: PluginContext) {
-      const db = await ctx.call<Database.Database>('sqlite.db')
+      db = await ctx.call<Database.Database>('sqlite.db')
       const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
-
-      // Publish event.log capability
-      const logEventFn: LogEventFn = (input) => logEvent(db, input)
-      ctx.register('event.log', (data: unknown) => logEventFn(data as EventLogInput))
 
       // Register HTTP routes
       registerNotifyRoutes(app, {
