@@ -21,6 +21,7 @@ export function createMemoryPlugin(embeddingConfig?: EmbeddingConfig): DriftPlug
 
   return {
     name: 'memory',
+    version: '1.1.0',
 
     configSchema: {
       apiKey:  { type: 'string', description: 'OpenAI 兼容 API Key (embedding)', secret: true },

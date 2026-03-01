@@ -15,6 +15,7 @@ export function createFeedPlugin(): DriftPlugin {
 
   return {
     name: 'feed',
+    version: '1.1.0',
     requiresCapabilities: ['sqlite.db', 'http.app'],
     tools: buildFeedTools(() => db!),
 

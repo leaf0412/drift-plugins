@@ -59,6 +59,7 @@ export function createNotifyPlugin(): DriftPlugin {
 
   return {
     name: 'notify',
+    version: '1.1.0',
     requiresCapabilities: ['sqlite.db', 'http.app'],
     capabilities: {
       'event.log': (data) => logEvent(db!, data as EventLogInput),

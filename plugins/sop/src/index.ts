@@ -161,6 +161,7 @@ export function createSopPlugin(mindDir?: string): DriftPlugin {
 
   return {
     name: 'sop',
+    version: '1.1.0',
     tools: buildSopTools(() => registry, () => executor),
     capabilities: {
       'sop.registry': () => registry,

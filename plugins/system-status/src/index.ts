@@ -66,6 +66,7 @@ export function createSystemStatusPlugin(): DriftPlugin {
 
   return {
     name: 'system-status',
+    version: '1.1.0',
 
     configSchema: {
       interval:         { type: 'string', description: 'Cron 表达式', default: '*/30 * * * *' },

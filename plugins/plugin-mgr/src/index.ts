@@ -287,6 +287,7 @@ export function createPluginMgrPlugin(options?: PluginMgrOptions): DriftPlugin {
   }
   return {
     name: 'plugin-mgr',
+    version: '1.1.0',
     tools: buildTools(opts),
 
     init(_ctx: PluginContext) {

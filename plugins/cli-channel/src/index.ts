@@ -13,6 +13,7 @@ import { getChannelRouter } from '../../channel/src/index.js'
 export function createCliChannelPlugin(): DriftPlugin {
   return {
     name: 'cli-channel',
+    version: '1.1.0',
     requiresCapabilities: ['channel.router'],
 
     async init(ctx: PluginContext) {

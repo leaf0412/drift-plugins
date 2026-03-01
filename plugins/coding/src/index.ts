@@ -12,6 +12,7 @@ export function createCodingPlugin(): DriftPlugin {
 
   return {
     name: 'coding',
+    version: '1.1.0',
     requiresCapabilities: ['sqlite.db', 'http.app'],
 
     tools: buildCodingTools(() => {

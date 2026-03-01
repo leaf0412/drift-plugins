@@ -33,6 +33,7 @@ export function createTelegramPlugin(options?: TelegramPluginOptions): DriftPlug
 
   return {
     name: 'telegram',
+    version: '1.1.0',
 
     configSchema: {
       botToken:      { type: 'string', description: 'Telegram Bot Token', secret: true, required: true },

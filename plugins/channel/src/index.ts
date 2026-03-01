@@ -18,6 +18,7 @@ export function createChannelPlugin(): DriftPlugin {
 
   return {
     name: 'channel',
+    version: '1.1.0',
     requiresCapabilities: ['sqlite.db', 'http.app'],
     capabilities: {
       'channel.router': () => router,

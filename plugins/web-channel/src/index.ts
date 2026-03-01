@@ -9,6 +9,7 @@ import { chatEventsToSse } from './sse.js'
 export function createWebChannelPlugin(): DriftPlugin {
   return {
     name: 'web-channel',
+    version: '1.1.0',
     requiresCapabilities: ['channel.router', 'http.app', 'chat.handle', 'chat.pending'],
 
     async init(ctx: PluginContext) {

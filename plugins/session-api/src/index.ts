@@ -15,6 +15,7 @@ import {
 export function createSessionApiPlugin(): DriftPlugin {
   return {
     name: 'session-api',
+    version: '1.1.0',
     requiresCapabilities: ['sqlite.db', 'http.app'],
 
     async init(ctx: PluginContext) {

@@ -38,6 +38,7 @@ export function createFeishuPlugin(options?: FeishuPluginOptions): DriftPlugin {
 
   return {
     name: 'feishu',
+    version: '1.1.0',
 
     configSchema: {
       appId:         { type: 'string', description: '飞书 App ID' },
