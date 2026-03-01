@@ -48,11 +48,23 @@ importers:
         specifier: ^3.0.0
         version: 3.2.4(@types/node@22.19.12)(tsx@4.21.0)
 
+  plugins/monitor:
+    devDependencies:
+      '@drift/core':
+        specifier: link:../../../drift/packages/core
+        version: link:../../../drift/packages/core
+
   plugins/system-status:
     dependencies:
       node-cron:
         specifier: ^3.0.3
         version: 3.0.3
+    devDependencies:
+      '@drift/core':
+        specifier: link:../../../drift/packages/core
+        version: link:../../../drift/packages/core
+
+  plugins/usage:
     devDependencies:
       '@drift/core':
         specifier: link:../../../drift/packages/core
