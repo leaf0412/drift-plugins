@@ -1,20 +1,27 @@
-import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
+import type { PluginContext } from '@drift/core/kernel'
 
-export function createUsagePlugin(): DriftPlugin {
+export function createUsagePlugin() {
   return {
     name: 'usage',
     version: '0.1.0',
-    optionalCapabilities: ['sqlite.db', 'http.app'],
 
     async init(ctx: PluginContext) {
-      const app = await ctx.call<any>('http.app', { pluginId: 'usage' })
+      // Get HTTP app from atoms (old daemon doesn't support ctx.call)
+      const { getHttpApp, getStorageDb } = await import('@drift/plugins')
+      let app: any
+      try {
+        app = getHttpApp(ctx)
+      } catch {
+        ctx.logger.warn('usage: HTTP app not available, skipping route')
+        return
+      }
 
       app.get('/api/usage', async (c: any) => {
         const days = parseInt(c.req.query('days') ?? '30', 10) || 30
 
         let db: any
         try {
-          db = await ctx.call<any>('sqlite.db')
+          db = getStorageDb(ctx)
         } catch {
           return c.json({
             today: { promptTokens: 0, completionTokens: 0, sessions: 0 },
