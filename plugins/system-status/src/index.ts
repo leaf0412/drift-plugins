@@ -1,7 +1,5 @@
 import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
 import type { Channel } from '@drift/core'
-import { readFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
 import cron from 'node-cron'
 import { collectStatus } from './collectors.js'
 import { formatMarkdown, formatFeishuCard } from './formatter.js'
@@ -51,37 +49,6 @@ function fingerprint(r: StatusReport): string {
   return parts.join('|')
 }
 
-// ── Config Loader ────────────────────────────────────────
-
-/**
- * Read config from $DRIFT_DATA_DIR/config.json -> plugins.systemStatus
- */
-function loadConfig(): SystemStatusConfig {
-  const dataDir = process.env.DRIFT_DATA_DIR || join(process.env.HOME || '/tmp', '.drift')
-  const configPath = join(dataDir, 'config.json')
-  const defaults: SystemStatusConfig = {
-    interval: '*/30 * * * *',
-    diskPaths: { '/': '系统盘' },
-  }
-
-  if (!existsSync(configPath)) return defaults
-
-  try {
-    const raw = JSON.parse(readFileSync(configPath, 'utf-8'))
-    const cfg = raw?.plugins?.systemStatus
-    if (!cfg) return defaults
-    return {
-      interval: cfg.interval || defaults.interval,
-      claudeOauthToken: cfg.claudeOauthToken || process.env.CLAUDE_OAUTH_TOKEN,
-      diskPaths: cfg.diskPaths || defaults.diskPaths,
-      daemonPort: cfg.daemonPort,
-      daemonAuthToken: cfg.daemonAuthToken || process.env.DRIFT_AUTH_TOKEN,
-    }
-  } catch {
-    return defaults
-  }
-}
-
 // ── Plugin Factory ────────────────────────────────────────
 
 /**
@@ -100,9 +67,25 @@ export function createSystemStatusPlugin(): DriftPlugin {
   return {
     name: 'system-status',
 
+    configSchema: {
+      interval:         { type: 'string', description: 'Cron 表达式', default: '*/30 * * * *' },
+      claudeOauthToken: { type: 'string', description: 'Claude OAuth Token', secret: true },
+      diskPaths:        { type: 'string', description: '磁盘路径 JSON (如 {"/": "系统盘"})' },
+      daemonPort:       { type: 'number', description: 'Drift daemon 端口', default: 3141 },
+      daemonAuthToken:  { type: 'string', description: 'Drift daemon auth token', secret: true },
+    },
+
     async init(ctx: PluginContext) {
       savedCtx = ctx
-      config = loadConfig()
+
+      const interval = ctx.config.get<string>('interval', '*/30 * * * *')
+      const claudeOauthToken = ctx.config.get<string>('claudeOauthToken')
+      const diskPathsRaw = ctx.config.get<string>('diskPaths', '{"/"："系统盘"}')
+      const diskPaths = typeof diskPathsRaw === 'object' ? diskPathsRaw as unknown as Record<string, string> : JSON.parse(diskPathsRaw || '{}')
+      const daemonPort = ctx.config.get<number>('daemonPort', 3141)
+      const daemonAuthToken = ctx.config.get<string>('daemonAuthToken')
+
+      config = { interval, claudeOauthToken, diskPaths, daemonPort, daemonAuthToken }
       ctx.logger.info('System status plugin initialized')
     },
 
