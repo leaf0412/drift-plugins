@@ -1,7 +1,7 @@
-import type { DriftPlugin, PluginContext } from '@drift/core'
+import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
+import type { Channel } from '@drift/core'
 import type Database from 'better-sqlite3'
 import type { Hono } from 'hono'
-import type { Channel } from '@drift/core'
 import { logNotification, listNotifications } from './notification-log.js'
 import { registerNotifyRoutes } from './routes.js'
 import { logEvent } from './event-log.js'
@@ -43,73 +43,6 @@ function formatEventContent(event: string, data: unknown): string {
 
 const SUBSCRIBED_EVENTS = ['chat.complete', 'cron.result', 'cron.notify', 'cron.chat', 'task.reminder'] as const
 
-// ── Context helpers ──────────────────────────────────────
-
-type AnyCtx = PluginContext & Record<string, unknown>
-
-async function getDbFromCtx(ctx: AnyCtx): Promise<Database.Database> {
-  if (typeof ctx['call'] === 'function') {
-    return (ctx['call'] as <T>(cap: string) => Promise<T>)<Database.Database>('sqlite.db')
-  }
-  const atoms = ctx['atoms'] as { atom<T>(k: string, d: T): { deref(): T } } | undefined
-  const db = atoms?.atom<Database.Database | null>('storage.db', null)?.deref()
-  if (!db) throw new Error('Storage plugin not initialized')
-  return db
-}
-
-async function getHttpFromCtx(ctx: AnyCtx): Promise<Hono> {
-  if (typeof ctx['call'] === 'function') {
-    const pluginId = ctx['pluginId'] as string | undefined
-    return (ctx['call'] as <T>(cap: string, data?: unknown) => Promise<T>)<Hono>('http.app', { pluginId })
-  }
-  const atoms = ctx['atoms'] as { atom<T>(k: string, d: T): { deref(): T } } | undefined
-  const app = atoms?.atom<Hono | null>('http.app', null)?.deref()
-  if (!app) throw new Error('HTTP plugin not initialized')
-  return app
-}
-
-function subscribeEvent(ctx: AnyCtx, event: string, handler: (data: unknown) => Promise<void>): () => void {
-  // New-style kernel context: ctx.on(event, handler)
-  if (typeof ctx['on'] === 'function') {
-    return (ctx['on'] as (event: string, handler: (data: unknown) => void) => () => void)(event, handler)
-  }
-  // Old-style external-kernel context: ctx.events.on(event, handler)
-  const events = ctx['events'] as { on(event: string, handler: (data: unknown) => void): () => void } | undefined
-  if (events && typeof events.on === 'function') {
-    return events.on(event, handler)
-  }
-  return () => {}
-}
-
-async function getChannels(ctx: AnyCtx): Promise<Channel[]> {
-  if (typeof ctx['call'] === 'function') {
-    return (ctx['call'] as <T>(cap: string) => Promise<T>)<Channel[]>('channel.list').catch(() => [] as Channel[])
-  }
-  const channels = ctx['channels'] as { list(): Channel[] } | undefined
-  return channels?.list() ?? []
-}
-
-async function getChannelByName(ctx: AnyCtx, name: string): Promise<Channel | null> {
-  if (typeof ctx['call'] === 'function') {
-    return (ctx['call'] as <T>(cap: string) => Promise<T>)<Channel>('channel.' + name).catch(() => null)
-  }
-  const channels = ctx['channels'] as { get(name: string): Channel | undefined } | undefined
-  return channels?.get(name) ?? null
-}
-
-function publishEventLogCapability(ctx: AnyCtx, fn: LogEventFn): void {
-  if (typeof ctx['register'] === 'function') {
-    ;(ctx['register'] as (name: string, handler: (data: unknown) => unknown) => void)('event.log', (data: unknown) => fn(data as EventLogInput))
-  } else {
-    // Old-style: publish via atom
-    const atoms = ctx['atoms'] as { atom<T>(k: string, d: T): { reset(v: T): T } } | undefined
-    if (atoms) {
-      atoms.atom<LogEventFn>('event.log', (() => { throw new Error('event.log not initialized') }) as unknown as LogEventFn)
-        .reset(fn)
-    }
-  }
-}
-
 // ── Plugin Factory ────────────────────────────────────────
 
 /**
@@ -125,26 +58,14 @@ export function createNotifyPlugin(): DriftPlugin {
 
   return {
     name: 'notify',
-    manifest: {
-      name: 'notify',
-      version: '1.0.0',
-      type: 'code',
-      capabilities: {
-        events: {
-          listen: ['chat.complete', 'cron.result', 'cron.notify', 'cron.chat', 'task.reminder'],
-        },
-      },
-      depends: ['storage', 'http'],
-    },
 
     async init(ctx: PluginContext) {
-      const anyCtx = ctx as AnyCtx
-      const db = await getDbFromCtx(anyCtx)
-      const app = await getHttpFromCtx(anyCtx)
+      const db = await ctx.call<Database.Database>('sqlite.db')
+      const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
 
-      // Publish event.log capability (new-style: ctx.register; old-style: atoms)
+      // Publish event.log capability
       const logEventFn: LogEventFn = (input) => logEvent(db, input)
-      publishEventLogCapability(anyCtx, logEventFn)
+      ctx.register('event.log', (data: unknown) => logEventFn(data as EventLogInput))
 
       // Register HTTP routes
       registerNotifyRoutes(app, {
@@ -152,10 +73,10 @@ export function createNotifyPlugin(): DriftPlugin {
         sendNotify: async (title: string, body: string, channelName?: string) => {
           let targets: Channel[]
           if (channelName) {
-            const ch = await getChannelByName(anyCtx, channelName)
+            const ch = await ctx.call<Channel>('channel.' + channelName).catch(() => null)
             targets = ch ? [ch] : []
           } else {
-            targets = await getChannels(anyCtx)
+            targets = await ctx.call<Channel[]>('channel.list').catch(() => [] as Channel[])
           }
           if (targets.length === 0) {
             throw new Error('No notification channels configured')
@@ -171,8 +92,8 @@ export function createNotifyPlugin(): DriftPlugin {
       })
 
       for (const event of SUBSCRIBED_EVENTS) {
-        const unsub = subscribeEvent(anyCtx, event, async (data) => {
-          const channels = await getChannels(anyCtx)
+        const unsub = ctx.on(event, async (data: unknown) => {
+          const channels = await ctx.call<Channel[]>('channel.list').catch(() => [] as Channel[])
           for (const channel of channels) {
             const obj = data as Record<string, unknown> | undefined
             const title = obj?.jobName as string ?? obj?.title as string ?? event
@@ -210,7 +131,7 @@ export function createNotifyPlugin(): DriftPlugin {
       for (const unsub of unsubs) unsub()
       unsubs.length = 0
     },
-  } as DriftPlugin
+  }
 }
 
 // ── Capability Accessor ───────────────────────────────────
@@ -218,18 +139,9 @@ export function createNotifyPlugin(): DriftPlugin {
 /**
  * Retrieve the event logger function via the capability system.
  * The notify plugin must be initialized before calling this.
- * New-style: uses ctx.call('event.log'); old-style: reads from atom.
  */
 export async function getEventLogger(ctx: PluginContext): Promise<LogEventFn> {
-  const anyCtx = ctx as AnyCtx
-  if (typeof anyCtx['call'] === 'function') {
-    return (anyCtx['call'] as <T>(cap: string) => Promise<T>)<LogEventFn>('event.log')
-  }
-  // Old-style: read from atom
-  const atoms = anyCtx['atoms'] as { atom<T>(k: string, d: T): { deref(): T } } | undefined
-  const fn = atoms?.atom<LogEventFn>('event.log', (() => { throw new Error('event.log not initialized') }) as unknown as LogEventFn)?.deref()
-  if (!fn) throw new Error('event.log not initialized')
-  return fn
+  return ctx.call<LogEventFn>('event.log')
 }
 
 // ── Re-exports ────────────────────────────────────────────

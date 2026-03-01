@@ -10,7 +10,7 @@ import {
 type ToolRegistration = Omit<DriftToolRegistration, 'pluginId' | 'source'>
 
 /**
- * Build 4 task tool definitions for ctx.registerTool().
+ * Build 4 task tool definitions for ctx.register('tool.<name>', handler).
  *
  * - task_create  — create a new task
  * - task_list    — list tasks with optional filters

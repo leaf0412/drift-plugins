@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { AtomRegistry } from '@drift/core'
-import type { PluginContext, LoggerLike, Channel } from '@drift/core'
+import type { PluginContext, LoggerLike } from '@drift/core/kernel'
+import type { Channel } from '@drift/core'
 import { createFeishuPlugin } from './index.js'
 import {
   generateSign,
@@ -24,108 +24,67 @@ const noopLogger: LoggerLike = {
   debug: () => {},
 }
 
-function createMockContext(
-  overrides?: Partial<PluginContext>,
-): PluginContext {
-  const atoms = new AtomRegistry()
+let ctxCounter = 0
+
+function createMockContext(): PluginContext {
+  const pluginId = `feishu-test-${++ctxCounter}`
+  const capabilities = new Map<string, (...args: unknown[]) => unknown>()
+
   return {
-    atoms,
+    pluginId,
     logger: noopLogger,
-    tools: { register: () => {}, unregister: () => {}, list: () => [] },
-    events: {
-      on: () => () => {},
-      emit: async () => {},
-      off: () => {},
-      clear: () => {},
+    register(name: string, handler: () => unknown) {
+      capabilities.set(name, handler)
     },
-    routes: {
-      get: () => {},
-      post: () => {},
-      put: () => {},
-      delete: () => {},
+    async call<T>(cap: string, _data?: unknown): Promise<T> {
+      const handler = capabilities.get(cap)
+      if (handler) return handler() as T
+      throw new Error(`Capability not found: ${cap}`)
     },
-    storage: {
-      queryAll: () => [],
-      queryOne: () => undefined,
-      execute: () => ({}),
-      transaction: <T>(fn: () => T) => fn(),
-    },
-    config: {
-      get: <T>(_k: string, d?: T) => d as T,
-      set: () => {},
-    },
-    chat: async function* () {},
-    channels: {
-      register: () => {},
-      unregister: () => {},
-      get: () => undefined,
-      list: () => [],
-      broadcast: async () => {},
-    },
-    ...overrides,
-  }
+    on: () => () => {},
+    emit: () => {},
+  } as unknown as PluginContext
 }
 
 // ── Tests: Plugin ─────────────────────────────────────────
 
 describe('createFeishuPlugin', () => {
-  it('returns a valid DriftPlugin with correct manifest', () => {
+  it('returns a valid DriftPlugin with correct name', () => {
     const plugin = createFeishuPlugin({ webhookUrl: 'https://example.com/hook' })
 
-    expect(plugin.manifest.name).toBe('feishu')
-    expect(plugin.manifest.version).toBe('1.0.0')
-    expect(plugin.manifest.type).toBe('code')
-    expect(plugin.manifest.depends).toEqual([])
-    expect(plugin.manifest.capabilities.network).toBe(true)
+    expect(plugin.name).toBe('feishu')
     expect(typeof plugin.init).toBe('function')
   })
 
-  it('init() registers a feishu Channel', async () => {
-    const registered: Channel[] = []
-    const ctx = createMockContext({
-      channels: {
-        register: (ch: Channel) => { registered.push(ch) },
-        unregister: () => {},
-        get: () => undefined,
-        list: () => [],
-        broadcast: async () => {},
-      },
-    })
+  it('init() registers a feishu Channel via ctx.register', async () => {
+    const ctx = createMockContext()
 
     const plugin = createFeishuPlugin({ webhookUrl: 'https://example.com/hook' })
-    await plugin.init(ctx)
+    await plugin.init!(ctx)
 
-    expect(registered.length).toBe(1)
-    expect(registered[0].name).toBe('feishu')
-    expect(registered[0].capabilities.streaming).toBe(false)
-    expect(registered[0].capabilities.richContent).toBe(true)
-    expect(registered[0].capabilities.fileUpload).toBe(false)
-    expect(registered[0].capabilities.interactive).toBe(false)
+    // Retrieve the channel via ctx.call (capability system)
+    const channel = await ctx.call<Channel>('channel.feishu')
+    expect(channel.name).toBe('feishu')
+    expect(channel.capabilities.streaming).toBe(false)
+    expect(channel.capabilities.richContent).toBe(true)
+    expect(channel.capabilities.fileUpload).toBe(false)
+    expect(channel.capabilities.interactive).toBe(false)
   })
 
   it('channel.send() calls sendFeishuText for text messages', async () => {
-    let registeredChannel: Channel | null = null
-
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ code: 0, msg: 'ok' }),
     })
     globalThis.fetch = mockFetch as unknown as typeof fetch
 
-    const ctx = createMockContext({
-      channels: {
-        register: (ch: Channel) => { registeredChannel = ch },
-        unregister: () => {},
-        get: () => undefined,
-        list: () => [],
-        broadcast: async () => {},
-      },
-    })
+    const ctx = createMockContext()
 
     const plugin = createFeishuPlugin({ webhookUrl: 'https://example.com/hook' })
-    await plugin.init(ctx)
+    await plugin.init!(ctx)
 
-    await registeredChannel!.send({
+    const registeredChannel = await ctx.call<Channel>('channel.feishu')
+    await registeredChannel.send({
       type: 'text',
       content: 'Hello world',
     })
@@ -139,29 +98,20 @@ describe('createFeishuPlugin', () => {
   })
 
   it('channel.send() calls sendFeishuWebhook for card messages', async () => {
-    let registeredChannel: Channel | null = null
-
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ code: 0, msg: 'ok' }),
     })
     globalThis.fetch = mockFetch as unknown as typeof fetch
 
-    const ctx = createMockContext({
-      channels: {
-        register: (ch: Channel) => { registeredChannel = ch },
-        unregister: () => {},
-        get: () => undefined,
-        list: () => [],
-        broadcast: async () => {},
-      },
-    })
+    const ctx = createMockContext()
 
     const plugin = createFeishuPlugin({ webhookUrl: 'https://example.com/hook' })
-    await plugin.init(ctx)
+    await plugin.init!(ctx)
 
+    const registeredChannel = await ctx.call<Channel>('channel.feishu')
     const card = formatChatCompleteCard({ content: 'test', model: 'gpt' })
-    await registeredChannel!.send({
+    await registeredChannel.send({
       type: 'card',
       content: '',
       metadata: { card },

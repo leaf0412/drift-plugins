@@ -1,9 +1,5 @@
-import type {
-  DriftPlugin,
-  PluginContext,
-  Channel,
-  OutgoingMessage,
-} from '@drift/core'
+import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
+import type { Channel, OutgoingMessage } from '@drift/core'
 import type Database from 'better-sqlite3'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -45,46 +41,13 @@ function readFeishuConfigFromFile(): FeishuPluginOptions {
   } catch { return {} }
 }
 
-// ── Context helpers ──────────────────────────────────────
-
-type AnyCtx = PluginContext & Record<string, unknown>
-
-function registerChannelCapability(ctx: AnyCtx, capabilityName: string, ch: Channel): void {
-  if (typeof ctx['register'] === 'function') {
-    ;(ctx['register'] as (n: string, h: () => unknown) => void)(capabilityName, () => ch)
-  } else if (ctx['channels'] && typeof (ctx['channels'] as Record<string, unknown>)['register'] === 'function') {
-    ;((ctx['channels'] as Record<string, unknown>)['register'] as (ch: Channel) => void)(ch)
-  }
-}
-
-async function getDb(ctx: AnyCtx): Promise<Database.Database> {
-  if (typeof ctx['call'] === 'function') {
-    return (ctx['call'] as <T>(cap: string) => Promise<T>)<Database.Database>('sqlite.db')
-  }
-  const atoms = ctx['atoms'] as { atom<T>(k: string, d: T): { deref(): T } } | undefined
-  const db = atoms?.atom<Database.Database | null>('storage.db', null)?.deref()
-  if (!db) throw new Error('Storage plugin not initialized')
-  return db
-}
-
-async function getChatHandleFn(ctx: AnyCtx): Promise<(msg: InboundMessage) => AsyncIterable<ChatEvent>> {
-  if (typeof ctx['call'] === 'function') {
-    return (ctx['call'] as <T>(cap: string) => Promise<T>)<(msg: InboundMessage) => AsyncIterable<ChatEvent>>('chat.handle')
-  }
-  const atoms = ctx['atoms'] as { atom<T>(k: string, d: T): { deref(): T } } | undefined
-  const fn = atoms?.atom<((msg: InboundMessage) => AsyncIterable<ChatEvent>) | null>('chat.handle', null)?.deref()
-  if (!fn) throw new Error('Chat plugin not initialized')
-  return fn
-}
-
 // ── Plugin Factory ────────────────────────────────────────
 
 /**
  * Create the Feishu plugin.
  *
  * Registers itself as a Channel capability (`channel.feishu`) so other plugins
- * can discover it via `ctx.call('channel.feishu')`. Falls back to the old
- * `ctx.channels.register()` API for backward compatibility.
+ * can discover it via `ctx.call('channel.feishu')`.
  *
  * If `wsConfig` is provided, also starts a WSClient long-poll connection
  * during the `start()` phase to receive incoming Feishu messages and
@@ -95,23 +58,13 @@ export function createFeishuPlugin(options?: FeishuPluginOptions): DriftPlugin {
   const opts: FeishuPluginOptions = options ?? readFeishuConfigFromFile()
   let wsClient: FeishuWsClient | null = null
   let sendQueue: WebhookSendQueue | null = null
-  let savedCtx: AnyCtx | null = null
+  let savedCtx: PluginContext | null = null
 
   return {
     name: 'feishu',
-    manifest: {
-      name: 'feishu',
-      version: '1.0.0',
-      type: 'code',
-      capabilities: {
-        events: { listen: ['chat.complete', 'cron.chat'] },
-        network: true,
-      },
-      depends: opts.wsConfig ? ['chat', 'channel', 'storage'] : [],
-    },
 
     async init(ctx: PluginContext) {
-      savedCtx = ctx as AnyCtx
+      savedCtx = ctx
       sendQueue = new WebhookSendQueue(ctx.logger)
 
       const queue = sendQueue
@@ -143,7 +96,7 @@ export function createFeishuPlugin(options?: FeishuPluginOptions): DriftPlugin {
         },
       }
 
-      registerChannelCapability(ctx as AnyCtx, 'channel.feishu', feishuChannel)
+      ctx.register('channel.feishu', () => feishuChannel)
       ctx.logger.info('Feishu channel registered (rate-limited send queue enabled)')
     },
 
@@ -151,8 +104,8 @@ export function createFeishuPlugin(options?: FeishuPluginOptions): DriftPlugin {
       if (!opts.wsConfig || !savedCtx) return
 
       const ctx = savedCtx
-      const db = await getDb(ctx)
-      const chatHandle = await getChatHandleFn(ctx)
+      const db = await ctx.call<Database.Database>('sqlite.db')
+      const chatHandle = await ctx.call<(msg: InboundMessage) => AsyncIterable<ChatEvent>>('chat.handle')
 
       wsClient = new FeishuWsClient(opts.wsConfig, {
         chatHandle,
@@ -174,7 +127,7 @@ export function createFeishuPlugin(options?: FeishuPluginOptions): DriftPlugin {
         wsClient = null
       }
     },
-  } as DriftPlugin
+  }
 }
 
 // ── Re-exports ────────────────────────────────────────────

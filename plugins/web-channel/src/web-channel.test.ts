@@ -142,18 +142,8 @@ describe('chatEventsToSse', () => {
 // ── createWebChannelPlugin ───────────────────────────────────
 
 describe('createWebChannelPlugin', () => {
-  it('has correct manifest', () => {
+  it('has correct name', () => {
     const plugin = createWebChannelPlugin()
-    expect(plugin.manifest.name).toBe('web-channel')
-    expect(plugin.manifest.version).toBe('1.0.0')
-    expect(plugin.manifest.depends).toContain('http')
-    expect(plugin.manifest.depends).toContain('chat')
-    expect(plugin.manifest.depends).toContain('channel')
-  })
-
-  it('declares routes and channels capabilities', () => {
-    const plugin = createWebChannelPlugin()
-    expect(plugin.manifest.capabilities?.routes).toContain('/api/chat')
-    expect(plugin.manifest.capabilities?.channels).toContain('web')
+    expect(plugin.name).toBe('web-channel')
   })
 })

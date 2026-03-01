@@ -4,25 +4,11 @@ import type { Hono } from 'hono'
 import { getChannelRouter } from '../../channel/src/index.js'
 import { chatEventsToSse } from './sse.js'
 
-// ── Manifest (kept for backward compat with existing tests) ──
-
-const manifest = {
-  name: 'web-channel',
-  version: '1.0.0',
-  type: 'code' as const,
-  capabilities: {
-    routes: ['/api/chat'],
-    channels: ['web'],
-  },
-  depends: ['http', 'chat', 'channel'],
-}
-
 // ── Plugin Factory ───────────────────────────────────────────
 
-export function createWebChannelPlugin(): DriftPlugin & { manifest: typeof manifest } {
+export function createWebChannelPlugin(): DriftPlugin {
   return {
     name: 'web-channel',
-    manifest,
 
     async init(ctx: PluginContext) {
       const router = getChannelRouter(ctx)

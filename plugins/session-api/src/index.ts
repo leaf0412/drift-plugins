@@ -1,7 +1,7 @@
 import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
+import type { Hono } from 'hono'
+import type Database from 'better-sqlite3'
 import {
-  getStorageDb,
-  getHttpApp,
   listSessions,
   getSession,
   deleteSession,
@@ -12,39 +12,13 @@ import {
   unifiedSearch,
 } from '@drift/plugins'
 
-const manifest = {
-  name: 'session-api',
-  version: '1.0.0',
-  type: 'code',
-  capabilities: {
-    routes: ['/api/sessions/*', '/api/search'],
-  },
-  depends: ['http', 'storage'],
-}
-
 export function createSessionApiPlugin(): DriftPlugin {
   return {
     name: 'session-api',
-    manifest,
 
     async init(ctx: PluginContext) {
-      let db: ReturnType<typeof getStorageDb>
-      try {
-        db = await ctx.call<ReturnType<typeof getStorageDb>>('sqlite.db')
-      } catch {
-        const atom = (ctx as any).atoms?.atom?.('storage.db', null)
-        db = atom?.deref?.()
-        if (!db) throw new Error('Storage plugin not initialized')
-      }
-
-      let app: ReturnType<typeof getHttpApp>
-      try {
-        app = await ctx.call<ReturnType<typeof getHttpApp>>('http.app', { pluginId: ctx.pluginId })
-      } catch {
-        const atom = (ctx as any).atoms?.atom?.('http.app', null)
-        app = atom?.deref?.()
-        if (!app) throw new Error('HTTP plugin not initialized')
-      }
+      const db = await ctx.call<Database.Database>('sqlite.db')
+      const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
 
       // ── GET /api/sessions ───────────────────────────────────
       app.get('/api/sessions', (c) => {

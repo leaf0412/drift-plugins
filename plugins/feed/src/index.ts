@@ -1,19 +1,8 @@
 import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
+import type { Hono } from 'hono'
+import type Database from 'better-sqlite3'
 import { listSubscriptions } from './service.js'
 import { buildFeedTools } from './tools.js'
-
-// ── Manifest ──────────────────────────────────────────────
-
-const manifest = {
-  name: 'feed',
-  version: '1.0.0',
-  type: 'code',
-  capabilities: {
-    routes: ['/api/feeds'],
-    events: { emit: ['feed.update', 'feed.error'] },
-  },
-  depends: ['storage', 'http'],
-}
 
 // ── Plugin Factory ────────────────────────────────────────
 
@@ -24,35 +13,15 @@ const manifest = {
 export function createFeedPlugin(): DriftPlugin {
   return {
     name: 'feed',
-    manifest,
 
     async init(ctx: PluginContext) {
-      let db: any
-      try {
-        db = await ctx.call<any>('sqlite.db')
-      } catch {
-        const atom = (ctx as any).atoms?.atom?.('storage.db', null)
-        db = atom?.deref?.()
-        if (!db) throw new Error('Storage plugin not initialized')
-      }
-
-      let app: any
-      try {
-        app = await ctx.call<any>('http.app', { pluginId: ctx.pluginId })
-      } catch {
-        const atom = (ctx as any).atoms?.atom?.('http.app', null)
-        app = atom?.deref?.()
-        if (!app) throw new Error('HTTP plugin not initialized')
-      }
+      const db = await ctx.call<Database.Database>('sqlite.db')
+      const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
 
       // Register agent tools
       const tools = buildFeedTools(db)
       for (const tool of tools) {
-        if (typeof ctx.register === 'function') {
-          ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
-        } else if ((ctx as any).registerTool) {
-          (ctx as any).registerTool(tool)
-        }
+        ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
       }
       ctx.logger.debug(`Feed: ${tools.length} tools registered`)
 

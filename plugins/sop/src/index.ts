@@ -6,19 +6,6 @@ import { parseSopFile } from './parser.js'
 import { SopExecutor } from './executor.js'
 import type { Sop } from './types.js'
 
-// ── Manifest ──────────────────────────────────────────────────
-
-const manifest = {
-  name: 'sop',
-  version: '1.0.0',
-  type: 'code',
-  capabilities: {
-    tools: ['sop_list', 'sop_run', 'sop_status', 'sop_advance'],
-    events: { emit: ['sop.started', 'sop.step_completed', 'sop.completed', 'sop.failed', 'sop.paused'] },
-  },
-  depends: [],
-}
-
 // ── Registry Helpers ─────────────────────────────────────────
 
 function loadSopsFromDir(sopDir: string, logger: PluginContext['logger']): Map<string, Sop> {
@@ -181,7 +168,6 @@ export function createSopPlugin(mindDir?: string): DriftPlugin {
 
   return {
     name: 'sop',
-    manifest,
 
     async init(ctx: PluginContext) {
       // Ensure sops directory exists
@@ -193,33 +179,13 @@ export function createSopPlugin(mindDir?: string): DriftPlugin {
       registry = loadSopsFromDir(sopDir, ctx.logger)
       ctx.logger.info(`SOP plugin initialized: ${registry.size} SOP(s) loaded`)
 
-      // Publish registry — support both new (ctx.register) and old (ctx.atoms) style
-      if (typeof ctx.register === 'function') {
-        ctx.register('sop.registry', () => registry)
-      }
-      // Always set atoms for backward compat with tests and other plugins
-      const atomsObj = (ctx as any).atoms
-      if (atomsObj?.atom) {
-        atomsObj.atom<Map<string, Sop>>('sop.registry', new Map()).reset(registry)
-      }
+      // Publish registry
+      ctx.register('sop.registry', () => registry)
 
-      // Build emit shim
-      const emitFn: EmitFn = (event: string, data?: unknown) => {
-        if (typeof ctx.emit === 'function') {
-          return ctx.emit(event, data)
-        }
-        return (ctx as any).events?.emit?.(event, data)
-      }
-
-      // Register tools — support both new (ctx.register) and old (ctx.registerTool) style
-      const tools = buildSopTools(() => registry, executor, emitFn)
+      // Register tools
+      const tools = buildSopTools(() => registry, executor, (event, data) => ctx.emit(event, data))
       for (const tool of tools) {
-        if (typeof ctx.register === 'function') {
-          ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
-        }
-        if ((ctx as any).registerTool) {
-          (ctx as any).registerTool(tool)
-        }
+        ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
       }
       ctx.logger.debug(`SOP: ${tools.length} tools registered`)
     },
@@ -228,14 +194,10 @@ export function createSopPlugin(mindDir?: string): DriftPlugin {
 
 export default createSopPlugin
 
-// ── Atom Accessor ────────────────────────────────────────────
+// ── Service Accessor ─────────────────────────────────────────
 
-export function getSopRegistry(ctx: PluginContext): Map<string, Sop> {
-  const atomsObj = (ctx as any).atoms
-  if (atomsObj?.atom) {
-    return atomsObj.atom<Map<string, Sop>>('sop.registry', new Map()).deref()
-  }
-  return new Map()
+export async function getSopRegistry(ctx: PluginContext): Promise<Map<string, Sop>> {
+  return ctx.call<Map<string, Sop>>('sop.registry')
 }
 
 // ── Re-exports ───────────────────────────────────────────────

@@ -36,12 +36,9 @@ function makeDb(dir: string): Database.Database {
 // ── Tests ──────────────────────────────────────────────────
 
 describe('session-api plugin', () => {
-  it('has correct manifest', () => {
+  it('has correct name', () => {
     const plugin = createSessionApiPlugin()
-    expect(plugin.manifest.name).toBe('session-api')
-    expect(plugin.manifest.depends).toEqual(['http', 'storage'])
-    expect(plugin.manifest.capabilities?.routes).toContain('/api/sessions/*')
-    expect(plugin.manifest.capabilities?.routes).toContain('/api/search')
+    expect(plugin.name).toBe('session-api')
   })
 })
 

@@ -1,7 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createCliChannelPlugin } from './index.js'
-import type { PluginContext, LoggerLike } from '@drift/core'
-import { ChannelRouter } from '../../channel/src/index.js'
+import type { PluginContext, LoggerLike } from '@drift/core/kernel'
+import { createChannelPlugin, ChannelRouter } from '../../channel/src/index.js'
+import { Hono } from 'hono'
+import Database from 'better-sqlite3'
 
 // ── Test helpers ──────────────────────────────────────────────
 
@@ -9,29 +11,44 @@ function makeLogger(): LoggerLike {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }
 
-function makeContext(logger: LoggerLike): PluginContext {
-  const router = new ChannelRouter()
+// Initialise channel plugin so _routerRegistry is populated
+let channelRouter: ChannelRouter | null = null
+let channelPluginRef: ReturnType<typeof createChannelPlugin> | null = null
+
+async function initChannelPlugin(): Promise<ChannelRouter> {
+  channelPluginRef = createChannelPlugin()
+  const services = new Map<string, Function>()
+  const app = new Hono()
+  const db = new Database(':memory:')
+  const channelCtx = {
+    pluginId: 'channel',
+    logger: makeLogger(),
+    register: vi.fn((key: string, handler: Function) => { services.set(key, handler) }),
+    call: vi.fn(async (key: string, ..._args: unknown[]) => {
+      if (key === 'http.app') return app
+      if (key === 'sqlite.db') return db
+      const handler = services.get(key)
+      if (handler) return handler()
+      throw new Error(`Service not found: ${key}`)
+    }),
+    emit: vi.fn(async () => {}),
+    on: vi.fn(() => () => {}),
+  } as unknown as PluginContext
+  await channelPluginRef.init!(channelCtx)
+  // The router is now in the module-level _routerRegistry
+  const routerHandler = services.get('channel.router') as Function
+  return routerHandler() as ChannelRouter
+}
+
+function makeContext(logger: LoggerLike): PluginContext & { _router: ChannelRouter } {
   const ctx = {
-    tools: { register: vi.fn(), unregister: vi.fn(), list: vi.fn(() => []) },
-    events: { on: vi.fn(() => () => {}), emit: vi.fn(async () => {}), off: vi.fn(), clear: vi.fn() },
-    routes: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
-    storage: { queryAll: vi.fn(() => []), queryOne: vi.fn(), execute: vi.fn(), transaction: vi.fn() },
-    atoms: {
-      atom: vi.fn((key: string) => {
-        if (key === 'channel.router') {
-          return { deref: () => router, swap: vi.fn(), reset: vi.fn(), watch: vi.fn() }
-        }
-        return { deref: vi.fn(), swap: vi.fn(), reset: vi.fn(), watch: vi.fn() }
-      }),
-      saveImage: vi.fn(),
-      restoreImage: vi.fn(),
-    },
-    config: { get: vi.fn(), set: vi.fn() },
+    pluginId: 'cli-channel',
     logger,
-    chat: vi.fn() as any,
-    channels: { register: vi.fn(), unregister: vi.fn(), get: vi.fn(), list: vi.fn(() => []), broadcast: vi.fn() },
-    registerTool: vi.fn(),
-    _router: router,
+    register: vi.fn(),
+    call: vi.fn(async () => {}),
+    emit: vi.fn(async () => {}),
+    on: vi.fn(() => () => {}),
+    _router: channelRouter!,
   }
   return ctx as unknown as PluginContext & { _router: ChannelRouter }
 }
@@ -39,10 +56,20 @@ function makeContext(logger: LoggerLike): PluginContext {
 // ── Tests ─────────────────────────────────────────────────────
 
 describe('cli-channel plugin', () => {
-  it('has correct manifest', () => {
+  beforeEach(async () => {
+    channelRouter = await initChannelPlugin()
+  })
+
+  afterEach(async () => {
+    // Clean up the module-level registry via channel plugin's stop
+    if (channelPluginRef?.stop) {
+      await channelPluginRef.stop()
+    }
+  })
+
+  it('has correct name', () => {
     const plugin = createCliChannelPlugin()
-    expect(plugin.manifest.name).toBe('cli-channel')
-    expect(plugin.manifest.depends).toContain('channel')
+    expect(plugin.name).toBe('cli-channel')
   })
 
   it('has init method', () => {
@@ -51,11 +78,11 @@ describe('cli-channel plugin', () => {
   })
 
   it('registers cli channel on init', async () => {
-    const ctx = makeContext(makeLogger()) as any
+    const ctx = makeContext(makeLogger())
     const plugin = createCliChannelPlugin()
-    await plugin.init(ctx)
+    await plugin.init!(ctx)
 
-    const router: ChannelRouter = ctx._router
+    const router = ctx._router
     const channel = router.get('cli')
     expect(channel).toBeDefined()
     expect(channel!.id).toBe('cli')
@@ -67,11 +94,11 @@ describe('cli-channel plugin', () => {
   })
 
   it('cli channel messaging adapters are no-ops', async () => {
-    const ctx = makeContext(makeLogger()) as any
+    const ctx = makeContext(makeLogger())
     const plugin = createCliChannelPlugin()
-    await plugin.init(ctx)
+    await plugin.init!(ctx)
 
-    const router: ChannelRouter = ctx._router
+    const router = ctx._router
     const channel = router.get('cli')!
 
     // listen returns a cleanup function
@@ -87,7 +114,7 @@ describe('cli-channel plugin', () => {
     const logger = makeLogger()
     const ctx = makeContext(logger)
     const plugin = createCliChannelPlugin()
-    await plugin.init(ctx)
+    await plugin.init!(ctx)
 
     expect(logger.info).toHaveBeenCalledWith('CLI channel plugin initialized')
   })

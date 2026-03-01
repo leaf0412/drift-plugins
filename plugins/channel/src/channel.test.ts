@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { AtomRegistry } from '@drift/core'
-import type { PluginContext, LoggerLike } from '@drift/core'
+import type { PluginContext, LoggerLike } from '@drift/core/kernel'
 import { Hono } from 'hono'
-import { createChannelPlugin, getChannelRouter, processInbound } from './index.js'
+import { createChannelPlugin, getChannelRouter, getChannelHooks, processInbound } from './index.js'
 import { HookPipeline } from './hooks.js'
 import type { DriftChannel, InboundMessage, OutboundMessage } from './types.js'
 
@@ -18,50 +17,29 @@ const noopLogger: LoggerLike = {
 /** Minimal mock DB that satisfies getStorageDb — routes won't be called in these tests. */
 const mockDb = {} as any
 
-function makeCtx(atoms: AtomRegistry, hooks?: HookPipeline): PluginContext {
-  // Pre-seed atoms that registerPairingRoutes needs
-  atoms.atom<Hono | null>('http.app', null).reset(new Hono())
-  atoms.atom('storage.db', null).reset(mockDb)
+let ctxCounter = 0
 
-  const ctx: PluginContext = {
-    atoms,
+function makeCtx(): PluginContext {
+  const pluginId = `channel-test-${++ctxCounter}`
+  const capabilities = new Map<string, (...args: unknown[]) => unknown>()
+
+  const ctx = {
+    pluginId,
     logger: noopLogger,
-    tools: { register: () => {}, unregister: () => {}, list: () => [] },
-    events: {
-      on: () => () => {},
-      emit: async () => {},
-      off: () => {},
-      clear: () => {},
+    register(name: string, handler: () => unknown) {
+      capabilities.set(name, handler)
     },
-    routes: {
-      get: () => {},
-      post: () => {},
-      put: () => {},
-      delete: () => {},
+    async call<T>(cap: string, data?: unknown): Promise<T> {
+      if (cap === 'http.app') return new Hono() as T
+      if (cap === 'sqlite.db') return mockDb as T
+      const handler = capabilities.get(cap)
+      if (handler) return handler(data) as T
+      throw new Error(`Capability not found: ${cap}`)
     },
-    storage: {
-      queryAll: () => [],
-      queryOne: () => undefined,
-      execute: () => ({}),
-      transaction: <T>(fn: () => T) => fn(),
-    },
-    config: {
-      get: <T>(_k: string, d?: T) => d as T,
-      set: () => {},
-    },
-    chat: async function* () {},
-    channels: {
-      register: () => {},
-      unregister: () => {},
-      get: () => undefined,
-      list: () => [],
-      broadcast: async () => {},
-    },
-  }
-  // Store hooks in atoms so processInbound can find them
-  if (hooks) {
-    atoms.atom<HookPipeline | null>('channel.hooks', null).reset(hooks)
-  }
+    on: () => () => {},
+    emit: () => {},
+  } as unknown as PluginContext
+
   return ctx
 }
 
@@ -82,36 +60,37 @@ function makeChannel(id: string): DriftChannel & { sentMessages: OutboundMessage
 // ── Tests ─────────────────────────────────────────────────────
 
 describe('createChannelPlugin', () => {
-  it('stores ChannelRouter in channel.router atom', async () => {
-    const atoms = new AtomRegistry()
-    const ctx = makeCtx(atoms)
+  it('registers ChannelRouter as capability', async () => {
+    const ctx = makeCtx()
     const plugin = createChannelPlugin()
 
-    await plugin.init(ctx)
+    await plugin.init!(ctx)
 
     const router = getChannelRouter(ctx)
     expect(router).toBeDefined()
     expect(typeof router.register).toBe('function')
   })
 
-  it('getChannelRouter throws if plugin not initialized', () => {
-    const atoms = new AtomRegistry()
-    const ctx = makeCtx(atoms)
+  it('getChannelRouter throws if plugin not initialized', async () => {
+    // Ensure module-level registries are clean by stopping a plugin instance
+    const tempPlugin = createChannelPlugin()
+    await tempPlugin.init!(makeCtx())
+    tempPlugin.stop!()
 
-    expect(() => getChannelRouter(ctx)).toThrow('Channel plugin not initialized')
+    const freshCtx = makeCtx()
+    expect(() => getChannelRouter(freshCtx)).toThrow('Channel plugin not initialized')
   })
 })
 
 describe('channel plugin: processInbound hook firing', () => {
-  let atoms: AtomRegistry
   let hooks: HookPipeline
   let ctx: PluginContext
 
   beforeEach(async () => {
-    atoms = new AtomRegistry()
-    hooks = new HookPipeline()
-    ctx = makeCtx(atoms, hooks)
-    await createChannelPlugin().init(ctx)
+    ctx = makeCtx()
+    await createChannelPlugin().init!(ctx)
+    // Get the hooks pipeline created by the plugin during init
+    hooks = getChannelHooks(ctx)!
   })
 
   it('fires message_received hook when processInbound() is called', async () => {
@@ -236,11 +215,10 @@ describe('channel plugin: processInbound hook firing', () => {
     expect(sentEvents[0].error).toBe('network error')
   })
 
-  it('processInbound works without hooks (no hooks registered)', async () => {
-    // Create a new context without hooks
-    const cleanAtoms = new AtomRegistry()
-    const cleanCtx = makeCtx(cleanAtoms)
-    await createChannelPlugin().init(cleanCtx)
+  it('processInbound works without hooks registered on the pipeline', async () => {
+    // Create a new context — plugin creates a fresh HookPipeline with no hooks
+    const cleanCtx = makeCtx()
+    await createChannelPlugin().init!(cleanCtx)
 
     const router = getChannelRouter(cleanCtx)
     const ch = makeChannel('web')

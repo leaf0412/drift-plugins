@@ -4,24 +4,11 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { scanPluginDirs } from '@drift/core'
-import type { DriftPlugin, DriftToolResult, PluginContext } from '@drift/core'
+import type { DriftToolResult } from '@drift/core'
+import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
 import type { PluginMgrOptions, PluginInfo } from './types.js'
 
 export type { PluginMgrOptions, PluginInfo } from './types.js'
-
-// ── Manifest ──────────────────────────────────────────────────
-
-const manifest = {
-  name: 'plugin-mgr',
-  version: '1.0.0',
-  type: 'code',
-  capabilities: {
-    tools: ['plugin_create', 'plugin_list', 'plugin_read', 'plugin_update', 'plugin_delete', 'plugin_reload'],
-    events: { emit: ['plugin.created', 'plugin.updated', 'plugin.deleted', 'plugin.reload', 'plugin.reload-all'] },
-    filesystem: ['pluginsDir'],
-  },
-  depends: [],
-}
 
 // ── Tool Registration Helper Type ─────────────────────────────
 
@@ -32,13 +19,10 @@ interface ToolRegistration {
   execute: (args: unknown) => Promise<DriftToolResult>
 }
 
-// ── Emit shim type ────────────────────────────────────────────
-
-interface EmitFn {
-  (event: string, data?: unknown): Promise<void> | void
-}
 
 // ── Tool Builders ─────────────────────────────────────────────
+
+type EmitFn = (event: string, data?: unknown) => Promise<void> | void
 
 function buildTools(
   options: PluginMgrOptions,
@@ -89,12 +73,12 @@ Rules: YAML frontmatter between --- is required. Each # heading = one tool. ## A
 
 **Code** (for complex logic) — content is index.ts, must default-export a factory:
 \`\`\`typescript
-import type { DriftPlugin, PluginContext } from '@drift/core'
+import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
 export default function create(): DriftPlugin {
   return {
-    manifest: { name: 'x', version: '1.0.0', type: 'code', depends: [] },
+    name: 'x',
     async init(ctx: PluginContext) {
-      ctx.registerTool({ name: 'my_tool', description: '...', parametersSchema: { type: 'object', properties: { input: { type: 'string' } }, required: ['input'] }, execute: async (args) => ({ success: true, output: 'result' }) })
+      ctx.register('tool.my_tool', async (data) => ({ success: true, output: 'result' }))
     },
   }
 }
@@ -318,7 +302,6 @@ export function createPluginMgrPlugin(options?: PluginMgrOptions): DriftPlugin {
   }
   return {
     name: 'plugin-mgr',
-    manifest,
 
     async init(ctx: PluginContext) {
       // Ensure plugins directory exists
@@ -326,26 +309,12 @@ export function createPluginMgrPlugin(options?: PluginMgrOptions): DriftPlugin {
         mkdirSync(opts.pluginsDir, { recursive: true })
       }
 
-      // Build emit shim that works with both old and new ctx
-      const emitFn: EmitFn = (event: string, data?: unknown) => {
-        if (typeof ctx.emit === 'function') {
-          return ctx.emit(event, data)
-        }
-        return (ctx as any).events?.emit?.(event, data)
-      }
-
-      const tools = buildTools(opts, emitFn)
+      const tools = buildTools(opts, (event, data) => ctx.emit(event, data))
       for (const tool of tools) {
-        if (typeof ctx.register === 'function') {
-          ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
-        } else if ((ctx as any).registerTool) {
-          (ctx as any).registerTool(tool)
-        }
+        ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
       }
 
-      if (typeof ctx.logger?.info === 'function') {
-        ctx.logger.info(`plugin-mgr: ${tools.length} tools registered`)
-      }
+      ctx.logger.info(`plugin-mgr: ${tools.length} tools registered`)
     },
   }
 }

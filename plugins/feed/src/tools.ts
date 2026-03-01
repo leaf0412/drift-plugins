@@ -9,7 +9,7 @@ import {
 type ToolRegistration = Omit<DriftToolRegistration, 'pluginId' | 'source'>
 
 /**
- * Build 3 feed tool definitions for ctx.registerTool().
+ * Build 3 feed tool definitions for ctx.register('tool.<name>', handler).
  *
  * - feed_subscribe   — subscribe to a feed source
  * - feed_list        — list all subscriptions

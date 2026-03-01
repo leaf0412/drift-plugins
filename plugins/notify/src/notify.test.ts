@@ -4,8 +4,8 @@ import { join, dirname } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 import Database from 'better-sqlite3'
 import { Hono } from 'hono'
-import { AtomRegistry } from '@drift/core'
-import type { PluginContext, LoggerLike, Channel, EventHandler } from '@drift/core'
+import type { PluginContext, LoggerLike } from '@drift/core/kernel'
+import type { Channel } from '@drift/core'
 import { SCHEMA_SQL } from '@drift/plugins'
 import { createNotifyPlugin } from './index.js'
 import { logNotification, listNotifications } from './notification-log.js'
@@ -33,70 +33,68 @@ const noopLogger: LoggerLike = {
   debug: () => {},
 }
 
-function createMockContext(
-  atoms: AtomRegistry,
-  overrides?: Partial<PluginContext>,
-): PluginContext {
-  return {
-    atoms,
+type EventHandler = (data: unknown) => void | Promise<void>
+
+let ctxCounter = 0
+
+interface MockCtxOptions {
+  db: Database.Database
+  channels?: Channel[]
+  onSubscribe?: (event: string, handler: EventHandler) => () => void
+}
+
+function createMockContext(opts: MockCtxOptions): PluginContext {
+  const pluginId = `notify-test-${++ctxCounter}`
+  const capabilities = new Map<string, (...args: unknown[]) => unknown>()
+  const eventHandlers = new Map<string, EventHandler>()
+
+  const ctx = {
+    pluginId,
     logger: noopLogger,
-    tools: { register: () => {}, unregister: () => {}, list: () => [] },
-    events: {
-      on: () => () => {},
-      emit: async () => {},
-      off: () => {},
-      clear: () => {},
+    register(name: string, handler: (...args: unknown[]) => unknown) {
+      capabilities.set(name, handler)
     },
-    routes: {
-      get: () => {},
-      post: () => {},
-      put: () => {},
-      delete: () => {},
+    async call<T>(cap: string, data?: unknown): Promise<T> {
+      if (cap === 'sqlite.db') return opts.db as T
+      if (cap === 'http.app') return new Hono() as T
+      if (cap === 'channel.list') return (opts.channels ?? []) as T
+      // channel.<name> lookup
+      if (cap.startsWith('channel.')) {
+        const name = cap.slice('channel.'.length)
+        const ch = (opts.channels ?? []).find(c => c.name === name)
+        if (ch) return ch as T
+      }
+      const handler = capabilities.get(cap)
+      if (handler) return handler(data) as T
+      throw new Error(`Capability not found: ${cap}`)
     },
-    storage: {
-      queryAll: () => [],
-      queryOne: () => undefined,
-      execute: () => ({}),
-      transaction: <T>(fn: () => T) => fn(),
+    on(event: string, handler: EventHandler): () => void {
+      if (opts.onSubscribe) {
+        return opts.onSubscribe(event, handler)
+      }
+      eventHandlers.set(event, handler)
+      return () => { eventHandlers.delete(event) }
     },
-    config: {
-      get: <T>(_k: string, d?: T) => d as T,
-      set: () => {},
-    },
-    chat: async function* () {},
-    channels: {
-      register: () => {},
-      unregister: () => {},
-      get: () => undefined,
-      list: () => [],
-      broadcast: async () => {},
-    },
-    ...overrides,
+    emit: () => {},
+    // Expose event handlers for test assertions
+    _eventHandlers: eventHandlers,
   }
+
+  return ctx as unknown as PluginContext
 }
 
 // ── Tests: Plugin ─────────────────────────────────────────
 
 describe('createNotifyPlugin', () => {
-  it('returns a valid DriftPlugin with correct manifest', () => {
+  it('returns a valid DriftPlugin with correct name', () => {
     const plugin = createNotifyPlugin()
 
-    expect(plugin.manifest.name).toBe('notify')
-    expect(plugin.manifest.version).toBe('1.0.0')
-    expect(plugin.manifest.type).toBe('code')
-    expect(plugin.manifest.depends).toEqual(['storage', 'http'])
-    expect(plugin.manifest.capabilities.events?.listen).toContain('chat.complete')
-    expect(plugin.manifest.capabilities.events?.listen).toContain('cron.result')
-    expect(plugin.manifest.capabilities.events?.listen).toContain('cron.notify')
-    expect(plugin.manifest.capabilities.events?.listen).toContain('cron.chat')
+    expect(plugin.name).toBe('notify')
     expect(typeof plugin.init).toBe('function')
   })
 
   it('init() subscribes to events and broadcasts to channels', async () => {
     const { db, dbPath } = makeTmpDb()
-    const atoms = new AtomRegistry()
-    atoms.atom<Database.Database | null>('storage.db', null).reset(db)
-    atoms.atom<Hono | null>('http.app', null).reset(new Hono())
 
     const handlers = new Map<string, EventHandler>()
     const mockSend = vi.fn().mockResolvedValue(undefined)
@@ -107,33 +105,24 @@ describe('createNotifyPlugin', () => {
       send: mockSend,
     }
 
-    const ctx = createMockContext(atoms, {
-      events: {
-        on: (event: string, handler: EventHandler) => {
-          handlers.set(event, handler)
-          return () => { handlers.delete(event) }
-        },
-        emit: async () => {},
-        off: () => {},
-        clear: () => {},
-      },
-      channels: {
-        register: () => {},
-        unregister: () => {},
-        get: () => mockChannel,
-        list: () => [mockChannel],
-        broadcast: async () => {},
+    const ctx = createMockContext({
+      db,
+      channels: [mockChannel],
+      onSubscribe: (event, handler) => {
+        handlers.set(event, handler)
+        return () => { handlers.delete(event) }
       },
     })
 
     const plugin = createNotifyPlugin()
-    await plugin.init(ctx)
+    await plugin.init!(ctx)
 
-    // Verify all 4 event handlers were registered
+    // Verify all 5 event handlers were registered
     expect(handlers.has('chat.complete')).toBe(true)
     expect(handlers.has('cron.result')).toBe(true)
     expect(handlers.has('cron.notify')).toBe(true)
     expect(handlers.has('cron.chat')).toBe(true)
+    expect(handlers.has('task.reminder')).toBe(true)
 
     // Simulate chat.complete event
     await handlers.get('chat.complete')!({ content: 'hello', model: 'test' })
@@ -159,9 +148,6 @@ describe('createNotifyPlugin', () => {
 
   it('logs failure when channel.send throws', async () => {
     const { db, dbPath } = makeTmpDb()
-    const atoms = new AtomRegistry()
-    atoms.atom<Database.Database | null>('storage.db', null).reset(db)
-    atoms.atom<Hono | null>('http.app', null).reset(new Hono())
 
     const handlers = new Map<string, EventHandler>()
     const mockSend = vi.fn().mockRejectedValue(new Error('send failed'))
@@ -172,27 +158,17 @@ describe('createNotifyPlugin', () => {
       send: mockSend,
     }
 
-    const ctx = createMockContext(atoms, {
-      events: {
-        on: (event: string, handler: EventHandler) => {
-          handlers.set(event, handler)
-          return () => { handlers.delete(event) }
-        },
-        emit: async () => {},
-        off: () => {},
-        clear: () => {},
-      },
-      channels: {
-        register: () => {},
-        unregister: () => {},
-        get: () => mockChannel,
-        list: () => [mockChannel],
-        broadcast: async () => {},
+    const ctx = createMockContext({
+      db,
+      channels: [mockChannel],
+      onSubscribe: (event, handler) => {
+        handlers.set(event, handler)
+        return () => { handlers.delete(event) }
       },
     })
 
     const plugin = createNotifyPlugin()
-    await plugin.init(ctx)
+    await plugin.init!(ctx)
 
     // Simulate cron.notify event
     await handlers.get('cron.notify')!({ jobName: 'test-job', message: 'hi' })
@@ -209,25 +185,18 @@ describe('createNotifyPlugin', () => {
 
   it('stop() unsubscribes all event handlers', async () => {
     const { db, dbPath } = makeTmpDb()
-    const atoms = new AtomRegistry()
-    atoms.atom<Database.Database | null>('storage.db', null).reset(db)
-    atoms.atom<Hono | null>('http.app', null).reset(new Hono())
 
     const unsubCalls: string[] = []
 
-    const ctx = createMockContext(atoms, {
-      events: {
-        on: (event: string, _handler: EventHandler) => {
-          return () => { unsubCalls.push(event) }
-        },
-        emit: async () => {},
-        off: () => {},
-        clear: () => {},
+    const ctx = createMockContext({
+      db,
+      onSubscribe: (event, _handler) => {
+        return () => { unsubCalls.push(event) }
       },
     })
 
     const plugin = createNotifyPlugin()
-    await plugin.init(ctx)
+    await plugin.init!(ctx)
 
     await plugin.stop!()
 
@@ -245,9 +214,6 @@ describe('createNotifyPlugin', () => {
 
   it('extracts title from event data (jobName > title > event name)', async () => {
     const { db, dbPath } = makeTmpDb()
-    const atoms = new AtomRegistry()
-    atoms.atom<Database.Database | null>('storage.db', null).reset(db)
-    atoms.atom<Hono | null>('http.app', null).reset(new Hono())
 
     const handlers = new Map<string, EventHandler>()
     const mockSend = vi.fn().mockResolvedValue(undefined)
@@ -257,27 +223,17 @@ describe('createNotifyPlugin', () => {
       send: mockSend,
     }
 
-    const ctx = createMockContext(atoms, {
-      events: {
-        on: (event: string, handler: EventHandler) => {
-          handlers.set(event, handler)
-          return () => {}
-        },
-        emit: async () => {},
-        off: () => {},
-        clear: () => {},
-      },
-      channels: {
-        register: () => {},
-        unregister: () => {},
-        get: () => mockChannel,
-        list: () => [mockChannel],
-        broadcast: async () => {},
+    const ctx = createMockContext({
+      db,
+      channels: [mockChannel],
+      onSubscribe: (event, handler) => {
+        handlers.set(event, handler)
+        return () => {}
       },
     })
 
     const plugin = createNotifyPlugin()
-    await plugin.init(ctx)
+    await plugin.init!(ctx)
 
     // Test jobName extraction
     await handlers.get('cron.result')!({ jobName: 'my-cron-job' })

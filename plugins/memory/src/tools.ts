@@ -16,7 +16,7 @@ interface MemoryRow {
 }
 
 /**
- * Build the 2 memory tool definitions for ctx.registerTool().
+ * Build the 2 memory tool definitions for ctx.register('tool.<name>', handler).
  *
  * - memory_save  — upsert a structured fact into the memory table
  * - memory_list  — query saved memories with optional filters

@@ -4,8 +4,7 @@ import { join, dirname } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 import Database from 'better-sqlite3'
 import { Hono } from 'hono'
-import { AtomRegistry } from '@drift/core'
-import type { PluginContext, LoggerLike, EventHandler } from '@drift/core'
+import type { PluginContext, LoggerLike } from '@drift/core/kernel'
 import { SCHEMA_SQL } from '@drift/plugins'
 import { createMemoryPlugin } from './index.js'
 import { createEmbeddingService, type EmbeddingConfig } from './embeddings.js'
@@ -35,74 +34,43 @@ const noopLogger: LoggerLike = {
 }
 
 function createMockContext(
-  atoms: AtomRegistry,
-  overrides?: Partial<PluginContext>,
+  db: Database.Database,
+  app: Hono,
 ): PluginContext {
+  const services = new Map<string, Function>()
   return {
-    atoms,
+    pluginId: 'memory',
     logger: noopLogger,
-    tools: { register: () => {}, unregister: () => {}, list: () => [] },
-    events: {
-      on: () => () => {},
-      emit: async () => {},
-      off: () => {},
-      clear: () => {},
-    },
-    routes: {
-      get: () => {},
-      post: () => {},
-      put: () => {},
-      delete: () => {},
-    },
-    storage: {
-      queryAll: () => [],
-      queryOne: () => undefined,
-      execute: () => ({}),
-      transaction: <T>(fn: () => T) => fn(),
-    },
-    config: {
-      get: <T>(_k: string, d?: T) => d as T,
-      set: () => {},
-    },
-    chat: async function* () {},
-    channels: {
-      register: () => {},
-      unregister: () => {},
-      get: () => undefined,
-      list: () => [],
-      broadcast: async () => {},
-    },
-    ...overrides,
-  }
+    register: vi.fn((key: string, handler: Function) => { services.set(key, handler) }),
+    call: vi.fn(async (key: string, ..._args: unknown[]) => {
+      if (key === 'sqlite.db') return db
+      if (key === 'http.app') return app
+      if (key === 'mind.dir') throw new Error('not available')
+      const handler = services.get(key)
+      if (handler) return handler()
+      throw new Error(`Service not found: ${key}`)
+    }),
+    emit: vi.fn(async () => {}),
+    on: vi.fn(() => () => {}),
+  } as unknown as PluginContext
 }
 
 // ── Tests: Plugin Factory ──────────────────────────────────
 
 describe('createMemoryPlugin', () => {
-  it('returns a valid DriftPlugin with correct manifest', () => {
+  it('returns a valid DriftPlugin with correct name', () => {
     const plugin = createMemoryPlugin()
 
-    expect(plugin.manifest.name).toBe('memory')
-    expect(plugin.manifest.version).toBe('1.0.0')
-    expect(plugin.manifest.type).toBe('code')
-    expect(plugin.manifest.depends).toEqual(['storage', 'http'])
-    expect(plugin.manifest.capabilities.routes).toContain('/api/memory')
-    expect(plugin.manifest.capabilities.routes).toContain('/api/knowledge')
-    expect(plugin.manifest.capabilities.routes).toContain('/api/recall')
-    expect(plugin.manifest.capabilities.storage).toContain('memories')
-    expect(plugin.manifest.capabilities.storage).toContain('memory_vec')
-    expect(plugin.manifest.capabilities.storage).toContain('knowledge_entries')
+    expect(plugin.name).toBe('memory')
     expect(typeof plugin.init).toBe('function')
   })
 
   it('init() succeeds without embedding config', async () => {
     const { db, dbPath } = makeTmpDb()
-    const atoms = new AtomRegistry()
-    atoms.atom<Database.Database | null>('storage.db', null).reset(db)
-    atoms.atom<Hono | null>('http.app', null).reset(new Hono())
+    const app = new Hono()
 
     const plugin = createMemoryPlugin()
-    await expect(plugin.init(createMockContext(atoms))).resolves.toBeUndefined()
+    await expect(plugin.init!(createMockContext(db, app))).resolves.toBeUndefined()
 
     db.close()
     cleanupPath(dbPath)
@@ -110,12 +78,10 @@ describe('createMemoryPlugin', () => {
 
   it('init() succeeds with embedding config', async () => {
     const { db, dbPath } = makeTmpDb()
-    const atoms = new AtomRegistry()
-    atoms.atom<Database.Database | null>('storage.db', null).reset(db)
-    atoms.atom<Hono | null>('http.app', null).reset(new Hono())
+    const app = new Hono()
 
     const plugin = createMemoryPlugin({ apiKey: 'test-key' })
-    await expect(plugin.init(createMockContext(atoms))).resolves.toBeUndefined()
+    await expect(plugin.init!(createMockContext(db, app))).resolves.toBeUndefined()
 
     db.close()
     cleanupPath(dbPath)

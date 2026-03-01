@@ -1,4 +1,4 @@
-import type { DriftPlugin, PluginContext } from '@drift/core'
+import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
 import type { Channel } from '@drift/core'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -51,18 +51,6 @@ function fingerprint(r: StatusReport): string {
   return parts.join('|')
 }
 
-// ── Context helpers ──────────────────────────────────────
-
-type AnyCtx = PluginContext & Record<string, unknown>
-
-async function getChannels(ctx: AnyCtx): Promise<Channel[]> {
-  if (typeof ctx['call'] === 'function') {
-    return (ctx['call'] as <T>(cap: string) => Promise<T>)<Channel[]>('channel.list').catch(() => [] as Channel[])
-  }
-  const channels = ctx['channels'] as { list(): Channel[] } | undefined
-  return channels?.list() ?? []
-}
-
 // ── Config Loader ────────────────────────────────────────
 
 /**
@@ -102,26 +90,18 @@ function loadConfig(): SystemStatusConfig {
  * Collects system metrics (CPU, memory, disk, GPU, Docker, Claude usage,
  * Drift status) on a cron schedule and pushes a formatted report to all
  * registered channels via the capability system (`channel.list`).
- * Falls back to `ctx.channels.list()` for backward compatibility.
  */
 export function createSystemStatusPlugin(): DriftPlugin {
   let task: cron.ScheduledTask | null = null
-  let savedCtx: AnyCtx | null = null
+  let savedCtx: PluginContext | null = null
   let config: SystemStatusConfig
   let lastFingerprint: string | null = null
 
   return {
     name: 'system-status',
-    manifest: {
-      name: 'system-status',
-      version: '1.0.0',
-      type: 'code',
-      capabilities: {},
-      depends: [],
-    },
 
     async init(ctx: PluginContext) {
-      savedCtx = ctx as AnyCtx
+      savedCtx = ctx
       config = loadConfig()
       ctx.logger.info('System status plugin initialized')
     },
@@ -143,7 +123,7 @@ export function createSystemStatusPlugin(): DriftPlugin {
           const markdown = formatMarkdown(report)
           const card = formatFeishuCard(report)
 
-          const channels = await getChannels(ctx)
+          const channels = await ctx.call<Channel[]>('channel.list').catch(() => [] as Channel[])
           ctx.logger.info(`System status: pushing to ${channels.length} channel(s)`)
           for (const ch of channels) {
             try {
@@ -174,7 +154,7 @@ export function createSystemStatusPlugin(): DriftPlugin {
         task = null
       }
     },
-  } as DriftPlugin
+  }
 }
 
 export default createSystemStatusPlugin
