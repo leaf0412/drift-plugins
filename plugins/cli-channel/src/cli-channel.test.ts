@@ -42,7 +42,9 @@ function makeContext(logger: LoggerLike): PluginContext & { _router: ChannelRout
     pluginId: 'cli-channel',
     logger,
     register: vi.fn(),
-    call: vi.fn(async () => {}),
+    call: vi.fn(async (key: string) => {
+      if (key === 'channel.router') return channelRouter!
+    }),
     emit: vi.fn(async () => {}),
     on: vi.fn(() => () => {}),
     _router: channelRouter!,
