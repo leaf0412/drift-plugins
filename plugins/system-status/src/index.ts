@@ -81,7 +81,7 @@ export function createSystemStatusPlugin(): DriftPlugin {
 
       const interval = ctx.config.get<string>('interval', '*/30 * * * *')
       const claudeOauthToken = ctx.config.get<string>('claudeOauthToken')
-      const diskPathsRaw = ctx.config.get<string>('diskPaths', '{"/"："系统盘"}')
+      const diskPathsRaw = ctx.config.get<string>('diskPaths', '{"/": "系统盘"}')
       const diskPaths = typeof diskPathsRaw === 'object' ? diskPathsRaw as unknown as Record<string, string> : JSON.parse(diskPathsRaw || '{}')
       const daemonPort = ctx.config.get<number>('daemonPort', 3141)
       const daemonAuthToken = ctx.config.get<string>('daemonAuthToken')

@@ -1,7 +1,6 @@
 import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
-import type { DriftChannel, InboundMessage } from '@drift/plugins'
+import type { InboundMessage } from '@drift/plugins'
 import type { Hono } from 'hono'
-import { getChannelRouter } from '../../channel/src/index.js'
 import { chatEventsToSse } from './sse.js'
 
 // ── Plugin Factory ───────────────────────────────────────────
@@ -13,13 +12,13 @@ export function createWebChannelPlugin(): DriftPlugin {
     requiresCapabilities: ['channel.router', 'http.app', 'chat.handle', 'chat.pending'],
 
     async init(ctx: PluginContext) {
-      const router = getChannelRouter(ctx)
+      const router = await ctx.call<any>('channel.router')
       const chatHandle = await ctx.call<Function>('chat.handle')
       const pendingApprovals = await ctx.call<any>('chat.pending')
       const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
 
       // Register as a DriftChannel on the ChannelRouter
-      const webChannel: DriftChannel = {
+      const webChannel = {
         id: 'web',
         meta: { name: 'Web', icon: 'browser', description: 'HTTP / SSE web channel' },
         capabilities: { text: true, streaming: true, files: true },
