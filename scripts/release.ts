@@ -18,7 +18,6 @@ import { stdin, stdout } from 'node:process'
 
 const PLUGINS = [
   'channel',
-  'cli-channel',
   'coding',
   'feed',
   'feishu',
