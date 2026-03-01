@@ -278,9 +278,9 @@ async function main() {
   }
 
   eofActive = false
-  rl.close()
 
   if (bumps.size === 0) {
+    rl.close()
     console.log('\nAll plugins skipped. Nothing to release.')
     process.exit(0)
   }
@@ -317,6 +317,7 @@ async function main() {
   console.log('--- end ---')
 
   if (dryRun) {
+    rl.close()
     console.log('\n  DRY RUN complete. No files were modified.\n')
     return
   }
@@ -331,10 +332,9 @@ async function main() {
     // tag doesn't exist, safe to proceed
   }
 
-  // 5c. Confirmation prompt
-  const confirmRl = createInterface({ input: stdin, output: stdout })
-  const confirm = await confirmRl.question(`\nProceed with release ${tag}? [y/N] `)
-  confirmRl.close()
+  // 5c. Confirmation prompt (reuse same readline to avoid piped-stdin issues)
+  const confirm = await rl.question(`\nProceed with release ${tag}? [y/N] `)
+  rl.close()
   if (confirm.trim().toLowerCase() !== 'y') {
     console.log('Aborted.')
     process.exit(0)
