@@ -1,8 +1,6 @@
 import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
 import type { Channel, OutgoingMessage } from '@drift/core'
 import type Database from 'better-sqlite3'
-import { readFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
 import { sendFeishuWebhook, sendFeishuText } from './webhook.js'
 import { FeishuWsClient } from './ws-client.js'
 import { WebhookSendQueue } from './send-queue.js'
@@ -19,28 +17,6 @@ export interface FeishuPluginOptions {
   wsConfig?: FeishuWsConfig
 }
 
-// ── Config Loader ────────────────────────────────────────
-
-function readFeishuConfigFromFile(): FeishuPluginOptions {
-  const dataDir = process.env.DRIFT_DATA_DIR || join(process.env.HOME || '/tmp', '.drift')
-  const configPath = join(dataDir, 'config.json')
-  if (!existsSync(configPath)) return {}
-  try {
-    const raw = JSON.parse(readFileSync(configPath, 'utf-8'))
-    const feishu = raw?.channels?.feishu
-    if (!feishu?.enabled) return {}
-    return {
-      webhookUrl: feishu.webhookUrl,
-      secret: feishu.webhookSecret,
-      wsConfig: feishu.appId && feishu.appSecret ? {
-        appId: feishu.appId,
-        appSecret: feishu.appSecret,
-        allowFrom: feishu.allowFrom ?? [],
-      } : undefined,
-    }
-  } catch { return {} }
-}
-
 // ── Plugin Factory ────────────────────────────────────────
 
 /**
@@ -54,17 +30,42 @@ function readFeishuConfigFromFile(): FeishuPluginOptions {
  * route them through the chat pipeline.
  */
 export function createFeishuPlugin(options?: FeishuPluginOptions): DriftPlugin {
-  // When loaded as external plugin (no args), read config from $DRIFT_DATA_DIR/config.json
-  const opts: FeishuPluginOptions = options ?? readFeishuConfigFromFile()
   let wsClient: FeishuWsClient | null = null
   let sendQueue: WebhookSendQueue | null = null
   let savedCtx: PluginContext | null = null
+  // Resolved config: constructor options override, else read from ctx.config in init()
+  let opts: FeishuPluginOptions = options ?? {}
 
   return {
     name: 'feishu',
 
+    configSchema: {
+      appId:         { type: 'string', description: '飞书 App ID' },
+      appSecret:     { type: 'string', description: '飞书 App Secret', secret: true },
+      webhookUrl:    { type: 'string', description: '飞书 Webhook URL (出站消息)' },
+      webhookSecret: { type: 'string', description: '飞书 Webhook 签名密钥', secret: true },
+      allowFrom:     { type: 'string[]', description: '允许的发送者 open_id 列表' },
+    },
+    requiresCapabilities: ['chat.handle'],
+
     async init(ctx: PluginContext) {
       savedCtx = ctx
+
+      // If no constructor options were provided, read from per-plugin config
+      if (!options) {
+        const appId = ctx.config.get<string>('appId')
+        const appSecret = ctx.config.get<string>('appSecret')
+        const webhookUrl = ctx.config.get<string>('webhookUrl')
+        const webhookSecret = ctx.config.get<string>('webhookSecret')
+        const allowFrom = ctx.config.get<string[]>('allowFrom', [])
+
+        opts = {
+          webhookUrl,
+          secret: webhookSecret,
+          wsConfig: appId && appSecret ? { appId, appSecret, allowFrom } : undefined,
+        }
+      }
+
       sendQueue = new WebhookSendQueue(ctx.logger)
 
       const queue = sendQueue
