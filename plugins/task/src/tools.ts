@@ -1,4 +1,4 @@
-import type { DriftToolRegistration, DriftToolResult } from '@drift/core'
+import type { DriftTool, ToolResult, PluginContext } from '@drift/core/kernel'
 import type Database from 'better-sqlite3'
 import {
   createTask,
@@ -7,24 +7,22 @@ import {
   deleteTask,
 } from './service.js'
 
-type ToolRegistration = Omit<DriftToolRegistration, 'pluginId' | 'source'>
-
 /**
- * Build 4 task tool definitions for ctx.register('tool.<name>', handler).
+ * Build 4 task tool definitions as declarative DriftTool[].
  *
  * - task_create  — create a new task
  * - task_list    — list tasks with optional filters
  * - task_update  — update an existing task by ID
  * - task_delete  — delete a task by ID
  */
-export function buildTaskTools(db: Database.Database): ToolRegistration[] {
+export function buildTaskTools(getDb: () => Database.Database): DriftTool[] {
   return [
     // ── task_create ──────────────────────────────────────────
     {
       name: 'task_create',
       description:
         'Create a new task (passive todo item). Tasks are NOT automatically executed on a schedule — for scheduled auto-execution, create an agent file in mind/agents/ instead. Returns the created task as JSON.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           title: {
@@ -61,7 +59,8 @@ export function buildTaskTools(db: Database.Database): ToolRegistration[] {
         },
         required: ['title'],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, _ctx: PluginContext): Promise<ToolResult> {
+        const db = getDb()
         try {
           const { title, description, priority, due_at, reminder_at, recurrence, tags } =
             args as {
@@ -100,7 +99,7 @@ export function buildTaskTools(db: Database.Database): ToolRegistration[] {
       name: 'task_list',
       description:
         'List tasks with optional filters. Returns a JSON array ordered by most recently created.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           status: {
@@ -132,7 +131,8 @@ export function buildTaskTools(db: Database.Database): ToolRegistration[] {
         },
         required: [],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, _ctx: PluginContext): Promise<ToolResult> {
+        const db = getDb()
         try {
           const { status, priority, tag, due_before, due_after, limit } =
             args as {
@@ -157,7 +157,7 @@ export function buildTaskTools(db: Database.Database): ToolRegistration[] {
       name: 'task_update',
       description:
         'Update an existing task by ID. Only provided fields are changed. Returns the updated task as JSON.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           id: {
@@ -203,7 +203,8 @@ export function buildTaskTools(db: Database.Database): ToolRegistration[] {
         },
         required: ['id'],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, _ctx: PluginContext): Promise<ToolResult> {
+        const db = getDb()
         try {
           const { id, ...fields } = args as {
             id?: string
@@ -238,7 +239,7 @@ export function buildTaskTools(db: Database.Database): ToolRegistration[] {
       name: 'task_delete',
       description:
         'Delete a task by ID. Returns "Deleted" on success.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           id: {
@@ -248,7 +249,8 @@ export function buildTaskTools(db: Database.Database): ToolRegistration[] {
         },
         required: ['id'],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, _ctx: PluginContext): Promise<ToolResult> {
+        const db = getDb()
         try {
           const { id } = args as { id?: string }
 

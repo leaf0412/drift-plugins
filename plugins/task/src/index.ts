@@ -14,37 +14,29 @@ import { checkReminders } from './reminder.js'
 export function createTaskPlugin(): DriftPlugin {
   let timer: ReturnType<typeof setInterval> | null = null
   let savedCtx: PluginContext | null = null
-  let savedDb: Database.Database | null = null
+  let db: Database.Database | null = null
 
   return {
     name: 'task',
     requiresCapabilities: ['sqlite.db', 'http.app'],
+    tools: buildTaskTools(() => db!),
 
     async init(ctx: PluginContext) {
       savedCtx = ctx
-      const db = await ctx.call<Database.Database>('sqlite.db')
-      savedDb = db
+      db = await ctx.call<Database.Database>('sqlite.db')
       const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
 
       registerTaskRoutes(app, db)
-
-      // Register agent tools via ctx.register
-      const tools = buildTaskTools(db)
-      for (const tool of tools) {
-        ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
-      }
-      ctx.logger.debug(`Task: ${tools.length} tools registered`)
 
       ctx.logger.info('Task plugin initialized')
     },
 
     async start() {
       const ctx = savedCtx!
-      const db = savedDb!
 
       timer = setInterval(async () => {
         try {
-          const count = await checkReminders(db, ctx.emit.bind(ctx))
+          const count = await checkReminders(db!, ctx.emit.bind(ctx))
           if (count > 0) {
             ctx.logger.info(`Task: ${count} reminder(s) sent`)
           }
