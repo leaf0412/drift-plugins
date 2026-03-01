@@ -1,5 +1,5 @@
 // sop/index.ts — SOP plugin factory
-import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
+import type { DriftPlugin, DriftTool, ToolResult, PluginContext } from '@drift/core/kernel'
 import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseSopFile } from './parser.js'
@@ -34,31 +34,21 @@ function loadSopsFromDir(sopDir: string, logger: PluginContext['logger']): Map<s
 
 // ── Tool Builders ─────────────────────────────────────────────
 
-interface SopToolDef {
-  name: string
-  description: string
-  parametersSchema: Record<string, unknown>
-  execute: (args: unknown) => Promise<{ success: boolean; output: string; error?: string }>
-}
-
-type EmitFn = (event: string, data?: unknown) => Promise<void> | void
-
 function buildSopTools(
   getRegistry: () => Map<string, Sop>,
-  executor: SopExecutor,
-  emitFn: EmitFn,
-): SopToolDef[] {
+  getExecutor: () => SopExecutor,
+): DriftTool[] {
   return [
     // sop_list — list all available SOPs
     {
       name: 'sop_list',
       description: 'List all available SOPs (Standard Operating Procedures) loaded from the mind/sops directory.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {},
         required: [],
       },
-      async execute() {
+      async execute(_args: unknown, _ctx: PluginContext): Promise<ToolResult> {
         const registry = getRegistry()
         const sops = [...registry.values()].map(sop => ({
           slug: sop.slug,
@@ -76,23 +66,24 @@ function buildSopTools(
     {
       name: 'sop_run',
       description: 'Start executing a SOP. Returns the execution ID and initial status. For step_by_step or supervised mode, the execution may pause requiring sop_advance.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           slug: { type: 'string', description: 'SOP slug (filename without .md extension)' },
         },
         required: ['slug'],
       },
-      async execute(args: unknown) {
+      async execute(args: unknown, ctx: PluginContext): Promise<ToolResult> {
         const { slug } = args as { slug: string }
         const registry = getRegistry()
+        const executor = getExecutor()
         const sop = registry.get(slug)
         if (!sop) {
           return { success: false, output: '', error: `SOP not found: ${slug}` }
         }
 
         const exec = executor.start(sop)
-        await emitFn('sop.started', { sopSlug: sop.slug, executionId: exec.id })
+        ctx.emit('sop.started', { sopSlug: sop.slug, executionId: exec.id })
 
         // No-op step runner — in real usage this would be injected by the agent plugin
         // The executor state machine advances; actual LLM execution is done externally
@@ -100,11 +91,11 @@ function buildSopTools(
         const result = await executor.run(exec.id, sop, noopRunner)
 
         if (result.status === 'completed') {
-          await emitFn('sop.completed', { sopSlug: sop.slug, executionId: exec.id })
+          ctx.emit('sop.completed', { sopSlug: sop.slug, executionId: exec.id })
         } else if (result.status === 'failed') {
-          await emitFn('sop.failed', { sopSlug: sop.slug, executionId: exec.id, reason: result.failureReason })
+          ctx.emit('sop.failed', { sopSlug: sop.slug, executionId: exec.id, reason: result.failureReason })
         } else if (result.status === 'awaiting_approval') {
-          await emitFn('sop.paused', { sopSlug: sop.slug, executionId: exec.id, currentStep: result.currentStep })
+          ctx.emit('sop.paused', { sopSlug: sop.slug, executionId: exec.id, currentStep: result.currentStep })
         }
 
         return { success: true, output: JSON.stringify(result) }
@@ -115,15 +106,16 @@ function buildSopTools(
     {
       name: 'sop_status',
       description: 'Get the current status of a SOP execution by its execution ID.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           executionId: { type: 'string', description: 'Execution ID returned by sop_run' },
         },
         required: ['executionId'],
       },
-      async execute(args: unknown) {
+      async execute(args: unknown, _ctx: PluginContext): Promise<ToolResult> {
         const { executionId } = args as { executionId: string }
+        const executor = getExecutor()
         const exec = executor.getExecution(executionId)
         if (!exec) {
           return { success: false, output: '', error: `Execution not found: ${executionId}` }
@@ -136,15 +128,16 @@ function buildSopTools(
     {
       name: 'sop_advance',
       description: 'Advance a paused SOP execution to the next step. Used for supervised and step_by_step modes.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           executionId: { type: 'string', description: 'Execution ID to advance' },
         },
         required: ['executionId'],
       },
-      async execute(args: unknown) {
+      async execute(args: unknown, _ctx: PluginContext): Promise<ToolResult> {
         const { executionId } = args as { executionId: string }
+        const executor = getExecutor()
         const ok = executor.advance(executionId)
         if (!ok) {
           const exec = executor.getExecution(executionId)
@@ -168,6 +161,7 @@ export function createSopPlugin(mindDir?: string): DriftPlugin {
 
   return {
     name: 'sop',
+    tools: buildSopTools(() => registry, () => executor),
 
     async init(ctx: PluginContext) {
       // Ensure sops directory exists
@@ -179,15 +173,10 @@ export function createSopPlugin(mindDir?: string): DriftPlugin {
       registry = loadSopsFromDir(sopDir, ctx.logger)
       ctx.logger.info(`SOP plugin initialized: ${registry.size} SOP(s) loaded`)
 
-      // Publish registry
+      // Publish registry as a capability (non-tool)
       ctx.register('sop.registry', () => registry)
 
-      // Register tools
-      const tools = buildSopTools(() => registry, executor, (event, data) => ctx.emit(event, data))
-      for (const tool of tools) {
-        ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
-      }
-      ctx.logger.debug(`SOP: ${tools.length} tools registered`)
+      ctx.logger.debug(`SOP: ${buildSopTools(() => registry, () => executor).length} tools declared`)
     },
   }
 }
