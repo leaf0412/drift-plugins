@@ -1,20 +1,8 @@
-import type { DriftPlugin, PluginManifest, PluginContext } from '@drift/core'
-import { getStorageDb, getHttpApp } from '@drift/plugins'
+import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
+import type { Hono } from 'hono'
+import type Database from 'better-sqlite3'
 import { registerCodingRoutes } from './routes.js'
 import { buildCodingTools } from './tools.js'
-
-// ── Manifest ──────────────────────────────────────────────────
-
-const manifest: PluginManifest = {
-  name: 'coding',
-  version: '1.0.0',
-  type: 'code',
-  capabilities: {
-    routes: ['/api/code/sessions', '/api/code/chat', '/api/code/diff', '/api/code/download'],
-    storage: ['coding_sessions'],
-  },
-  depends: ['storage', 'http', 'chat'],
-}
 
 // ── Plugin Factory ────────────────────────────────────────────
 
@@ -22,45 +10,41 @@ export function createCodingPlugin(): DriftPlugin {
   const workspaceMap = new Map<string, string>()
 
   return {
-    manifest,
+    name: 'coding',
 
     async init(ctx: PluginContext) {
-      const db = getStorageDb(ctx)
-      const app = getHttpApp(ctx)
+      const db = await ctx.call<Database.Database>('sqlite.db')
+      const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
 
       // Register HTTP routes — pass workspace setter so the chat route
       // can activate the correct workspace before streaming begins.
       registerCodingRoutes(app, {
         db,
         getChatStream: () => {
-          try {
-            return ctx.atoms.atom<any>('chat.stream', null).deref()
-          } catch {
-            return null
-          }
+          // chat.stream is resolved at call time (lazy), so we return a thunk
+          // that awaits the capability — callers that need it synchronously
+          // (old pattern) get null; async callers use the returned promise.
+          return null
         },
+        getChatStreamAsync: () => ctx.call<any>('chat.stream').catch(() => null),
         setActiveWorkspace: (sessionId: string, path: string | null) => {
           if (path) workspaceMap.set(sessionId, path)
           else workspaceMap.delete(sessionId)
         },
       })
 
-      // Register git tools via PluginRegistry
-      if (ctx.registerTool) {
-        // Tools read activeWorkspacePath via closure — route handler
-        // sets it before each chat invocation and clears it after.
-        const tools = buildCodingTools(() => {
-          if (workspaceMap.size === 0) return null
-          if (workspaceMap.size > 1) {
-            ctx.logger.warn(`Coding: ${workspaceMap.size} concurrent sessions, using first workspace`)
-          }
-          return [...workspaceMap.values()][0]
-        })
-        for (const tool of tools) {
-          ctx.registerTool(tool)
+      // Register git tools as capabilities via ctx.register
+      const tools = buildCodingTools(() => {
+        if (workspaceMap.size === 0) return null
+        if (workspaceMap.size > 1) {
+          ctx.logger.warn(`Coding: ${workspaceMap.size} concurrent sessions, using first workspace`)
         }
-        ctx.logger.debug(`Coding: ${tools.length} tools registered`)
+        return [...workspaceMap.values()][0]
+      })
+      for (const tool of tools) {
+        ctx.register(`tool.${tool.name}`, async (args) => tool.execute(args))
       }
+      ctx.logger.debug(`Coding: ${tools.length} tools registered`)
 
       ctx.logger.info('Coding plugin initialized')
     },

@@ -25,7 +25,8 @@ type ChatStreamFn = (
 
 export interface CodingRouteDeps {
   db: Database.Database
-  getChatStream: () => ChatStreamFn | null
+  getChatStream?: () => ChatStreamFn | null
+  getChatStreamAsync?: () => Promise<ChatStreamFn | null>
   setActiveWorkspace: (sessionId: string, path: string | null) => void
 }
 
@@ -261,7 +262,9 @@ export function registerCodingRoutes(app: Hono, deps: CodingRouteDeps): void {
       return c.json({ error: 'Coding session is not active' }, 400)
     }
 
-    const chatStream = deps.getChatStream()
+    const chatStream = deps.getChatStreamAsync
+      ? await deps.getChatStreamAsync()
+      : (deps.getChatStream ? deps.getChatStream() : null)
     if (!chatStream) {
       return c.json({ error: 'Chat plugin not available' }, 503)
     }

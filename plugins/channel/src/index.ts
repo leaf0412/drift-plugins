@@ -1,56 +1,121 @@
-import type { DriftPlugin, PluginManifest, PluginContext } from '@drift/core'
+import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
+import type { Hono } from 'hono'
 import { ChannelRouter } from './router.js'
 import { HookPipeline } from './hooks.js'
 import type { InboundMessage, OutboundMessage } from './types.js'
 import { registerPairingRoutes } from './pairing-routes.js'
 
-// ── Plugin Manifest ──────────────────────────────────────────
-
-const manifest: PluginManifest = {
-  name: 'channel',
-  version: '1.0.0',
-  type: 'code',
-  capabilities: {
-    events: { emit: ['channel.message_received', 'channel.message_sent'] },
-    routes: ['/api/channels/*'],
-  },
-  depends: ['http', 'storage'],
-}
+// ── Module-level registry for new-style ctx (no atoms) ────────
+// Keyed by pluginId when ctx.register is available.
+const _routerRegistry = new Map<string, ChannelRouter>()
+const _hooksRegistry = new Map<string, HookPipeline>()
 
 // ── Plugin Factory ────────────────────────────────────────────
 
 export function createChannelPlugin(): DriftPlugin {
   return {
-    manifest,
+    name: 'channel',
 
     async init(ctx: PluginContext) {
       const router = new ChannelRouter()
-      ctx.atoms.atom<ChannelRouter | null>('channel.router', null).reset(router)
+      const ctxAny = ctx as any
 
-      // Initialize hook pipeline if not already set (tests may pre-set it)
-      const existingHooks = ctx.atoms.atom<HookPipeline | null>('channel.hooks', null).deref()
-      if (!existingHooks) {
-        ctx.atoms.atom<HookPipeline | null>('channel.hooks', null).reset(new HookPipeline())
+      // Register ChannelRouter as a capability (new-style)
+      if (typeof ctx.register === 'function') {
+        ctx.register('channel.router', () => router)
+        // Also store in module registry for synchronous getChannelRouter access
+        _routerRegistry.set(ctx.pluginId, router)
+      }
+
+      // Also store in atoms for backward compat (old-style ctx in tests)
+      if (ctxAny.atoms?.atom) {
+        ctxAny.atoms.atom('channel.router', null).reset(router)
+      }
+
+      // Initialize hook pipeline — reuse pre-seeded hooks if present (tests may set them)
+      let effectiveHooks: HookPipeline
+
+      const existingHooks = ctxAny.atoms?.atom?.('channel.hooks', null)?.deref?.() as HookPipeline | null | undefined
+      if (existingHooks) {
+        effectiveHooks = existingHooks
+      } else {
+        effectiveHooks = new HookPipeline()
+        if (ctxAny.atoms?.atom) {
+          ctxAny.atoms.atom('channel.hooks', null).reset(effectiveHooks)
+        }
+      }
+
+      // Register HookPipeline as a capability (new-style)
+      if (typeof ctx.register === 'function') {
+        const hooks = effectiveHooks
+        ctx.register('channel.hooks', () => hooks)
+        _hooksRegistry.set(ctx.pluginId, hooks)
       }
 
       // Register pairing API routes
-      registerPairingRoutes(ctx)
+      await registerPairingRoutes(ctx)
 
       ctx.logger.info('Channel plugin initialized')
+    },
+
+    stop() {
+      // Clean up module registry on stop (supports hot-reload)
+      for (const key of Array.from(_routerRegistry.keys())) {
+        _routerRegistry.delete(key)
+      }
+      for (const key of Array.from(_hooksRegistry.keys())) {
+        _hooksRegistry.delete(key)
+      }
     },
   }
 }
 
 // ── Accessors ──────────────────────────────────────────────────
 
-export function getChannelRouter(ctx: PluginContext): ChannelRouter {
-  const router = ctx.atoms.atom<ChannelRouter | null>('channel.router', null).deref()
-  if (!router) throw new Error('Channel plugin not initialized')
-  return router
+/**
+ * Get the ChannelRouter from context.
+ * Works with both new-style ctx (capability system + module registry) and
+ * old-style ctx (atoms). Synchronous for backward compatibility with tests
+ * and dependent plugins (cli-channel, web-channel).
+ */
+export function getChannelRouter(ctx: any): ChannelRouter {
+  // Try old-style atoms first (covers tests and old-style ctx)
+  const atom = ctx.atoms?.atom?.('channel.router', null)
+  const atomRouter = atom?.deref?.()
+  if (atomRouter) return atomRouter
+
+  // Try module-level registry (covers new-style ctx after init)
+  if (ctx.pluginId) {
+    const regRouter = _routerRegistry.get(ctx.pluginId)
+    if (regRouter) return regRouter
+  }
+  // For new-style ctx without pluginId, fall back to first registered router
+  if (_routerRegistry.size > 0) {
+    const firstRouter = _routerRegistry.values().next().value
+    if (firstRouter) return firstRouter
+  }
+
+  throw new Error('Channel plugin not initialized')
 }
 
-export function getChannelHooks(ctx: PluginContext): HookPipeline | null {
-  return ctx.atoms.atom<HookPipeline | null>('channel.hooks', null).deref()
+/**
+ * Get the HookPipeline from context.
+ * Works with both new-style ctx and old-style ctx (atoms). Synchronous.
+ */
+export function getChannelHooks(ctx: any): HookPipeline | null {
+  // Try old-style atoms first (covers tests and old-style ctx)
+  const atomHooks = ctx.atoms?.atom?.('channel.hooks', null)?.deref?.()
+  if (atomHooks) return atomHooks as HookPipeline
+
+  // Try module-level registry (covers new-style ctx after init)
+  if (ctx.pluginId) {
+    return _hooksRegistry.get(ctx.pluginId) ?? null
+  }
+  if (_hooksRegistry.size > 0) {
+    return _hooksRegistry.values().next().value ?? null
+  }
+
+  return null
 }
 
 // ── processInbound ────────────────────────────────────────────
@@ -67,7 +132,7 @@ export function getChannelHooks(ctx: PluginContext): HookPipeline | null {
  * assemble a reply, without needing to duplicate hook logic.
  */
 export async function processInbound(
-  ctx: PluginContext,
+  ctx: any,
   msg: InboundMessage,
   reply: OutboundMessage,
 ): Promise<void> {
@@ -130,6 +195,8 @@ export async function processInbound(
     )
   }
 }
+
+export default createChannelPlugin
 
 // ── Re-exports ────────────────────────────────────────────────
 
