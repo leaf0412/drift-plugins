@@ -5,7 +5,9 @@ import {
 import { join } from 'node:path'
 import { scanPluginDirs } from '@drift/core'
 import type { DriftPlugin, DriftTool, ToolResult, PluginContext } from '@drift/core/kernel'
+import type { Hono } from 'hono'
 import type { PluginMgrOptions, PluginInfo } from './types.js'
+import { registerPluginMgrRoutes } from './routes.js'
 
 export type { PluginMgrOptions, PluginInfo } from './types.js'
 
@@ -287,14 +289,20 @@ export function createPluginMgrPlugin(options?: PluginMgrOptions): DriftPlugin {
   }
   return {
     name: 'plugin-mgr',
-    version: '1.1.0',
+    version: '1.2.0',
+    requiresCapabilities: ['plugin-mgr.list', 'http.app'],
     tools: buildTools(opts),
 
-    init(_ctx: PluginContext) {
+    async init(ctx: PluginContext) {
       // Ensure plugins directory exists
       if (!existsSync(opts.pluginsDir)) {
         mkdirSync(opts.pluginsDir, { recursive: true })
       }
+
+      // Register HTTP routes via the route proxy
+      const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
+      registerPluginMgrRoutes(app, ctx)
+      ctx.logger.info('plugin-mgr: HTTP routes registered')
     },
   }
 }
