@@ -4,7 +4,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { scanPluginDirs } from '@drift/core'
-import type { DriftPlugin, DriftTool, ToolResult, PluginContext } from '@drift/core/kernel'
+import type { PluginContext, DriftTool, ToolResult } from '@drift/core/kernel'
 import type { Hono } from 'hono'
 import type { PluginMgrOptions, PluginInfo } from './types.js'
 import { registerPluginMgrRoutes } from './routes.js'
@@ -106,7 +106,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
           writeFileSync(join(dir, 'plugin.yaml'), yaml, 'utf-8')
         }
 
-        ctx.emit('plugin.created', { name, type })
+        ctx.events.emit('plugin.created', { name, type })
         return { success: true, output: `Plugin "${name}" created (${type}) at ${dir}` }
       },
     },
@@ -206,14 +206,14 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         const mdPath = join(dir, 'plugin.md')
         if (existsSync(mdPath)) {
           writeFileSync(mdPath, content, 'utf-8')
-          ctx.emit('plugin.updated', { name, type: 'declarative' })
+          ctx.events.emit('plugin.updated', { name, type: 'declarative' })
           return { success: true, output: `Plugin "${name}" updated (declarative)` }
         }
 
         const tsPath = join(dir, 'index.ts')
         if (existsSync(tsPath)) {
           writeFileSync(tsPath, content, 'utf-8')
-          ctx.emit('plugin.updated', { name, type: 'code' })
+          ctx.events.emit('plugin.updated', { name, type: 'code' })
           return { success: true, output: `Plugin "${name}" updated (code)` }
         }
 
@@ -245,7 +245,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         }
 
         rmSync(dir, { recursive: true, force: true })
-        ctx.emit('plugin.deleted', { name })
+        ctx.events.emit('plugin.deleted', { name })
         return { success: true, output: `Plugin "${name}" deleted` }
       },
     },
@@ -268,12 +268,12 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
           if (isBuiltin(name)) {
             return { success: false, output: '', error: `Cannot reload builtin plugin "${name}"` }
           }
-          ctx.emit('plugin.reload', { name })
+          ctx.events.emit('plugin.reload', { name })
           return { success: true, output: `Reload triggered for plugin "${name}"` }
         }
 
         // Reload all
-        ctx.emit('plugin.reload-all', {})
+        ctx.events.emit('plugin.reload-all', {})
         return { success: true, output: 'Reload triggered for all external plugins' }
       },
     },
@@ -282,7 +282,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
 
 // ── Plugin Factory ────────────────────────────────────────────
 
-export function createPluginMgrPlugin(options?: PluginMgrOptions): DriftPlugin {
+export function createPluginMgrPlugin(options?: PluginMgrOptions) {
   const opts: PluginMgrOptions = options ?? {
     pluginsDir: join(process.env.DRIFT_DATA_DIR || join(process.env.HOME || '/tmp', '.drift'), 'plugins'),
     builtinNames: [],
@@ -290,8 +290,6 @@ export function createPluginMgrPlugin(options?: PluginMgrOptions): DriftPlugin {
   return {
     name: 'plugin-mgr',
     version: '1.2.0',
-    requiresCapabilities: ['plugin-mgr.list', 'http.app'],
-    tools: buildTools(opts),
 
     async init(ctx: PluginContext) {
       // Ensure plugins directory exists
@@ -299,10 +297,34 @@ export function createPluginMgrPlugin(options?: PluginMgrOptions): DriftPlugin {
         mkdirSync(opts.pluginsDir, { recursive: true })
       }
 
-      // Register HTTP routes via the route proxy
-      const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
-      registerPluginMgrRoutes(app, ctx)
+      // Get HTTP app via atom (old daemon doesn't support ctx.call)
+      const { getHttpApp } = await import('@drift/plugins')
+      let app: Hono
+      try {
+        app = getHttpApp(ctx)
+      } catch {
+        ctx.logger.warn('plugin-mgr: HTTP app not available, skipping routes')
+        return
+      }
+
+      // Get PluginManager from atoms (typed as any since PM type may not be in @drift/core yet)
+      const pm = ctx.atoms.atom<any>('core.pluginManager', null).deref()
+
+      // Register HTTP routes
+      registerPluginMgrRoutes(app, pm)
       ctx.logger.info('plugin-mgr: HTTP routes registered')
+
+      // Register AI agent tools via ctx.registerTool (old daemon pattern)
+      const tools = buildTools(opts)
+      for (const tool of tools) {
+        ctx.registerTool?.({
+          name: tool.name,
+          description: tool.description,
+          parametersSchema: tool.parameters,
+          execute: async (args: unknown) => tool.execute(args, ctx),
+        })
+      }
+      ctx.logger.info(`plugin-mgr: ${tools.length} tools registered`)
     },
   }
 }
