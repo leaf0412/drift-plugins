@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '@drift/plugins'
+import type { PluginContext } from '@drift/core/kernel'
 import { buildMemoryTools } from './tools.js'
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -17,6 +18,8 @@ function makeDb(): { db: Database.Database; dir: string } {
   db.exec(SCHEMA_SQL)
   return { db, dir }
 }
+
+const mockCtx = {} as PluginContext
 
 // ── Tests ───────────────────────────────────────────────────
 
@@ -38,24 +41,24 @@ describe('buildMemoryTools', () => {
   // ── Structure tests ──────────────────────────────────────
 
   it('returns exactly 2 tool definitions', () => {
-    const tools = buildMemoryTools(db)
+    const tools = buildMemoryTools(() => db)
     expect(tools.length).toBe(2)
   })
 
   it('tool names are memory_save and memory_list', () => {
-    const tools = buildMemoryTools(db)
+    const tools = buildMemoryTools(() => db)
     const names = tools.map(t => t.name).sort()
     expect(names).toEqual(['memory_list', 'memory_save'])
   })
 
-  it('each tool has name, description, parametersSchema, and execute', () => {
-    const tools = buildMemoryTools(db)
+  it('each tool has name, description, parameters, and execute', () => {
+    const tools = buildMemoryTools(() => db)
     for (const tool of tools) {
       expect(typeof tool.name).toBe('string')
       expect(tool.name.length).toBeGreaterThan(0)
       expect(typeof tool.description).toBe('string')
       expect(tool.description.length).toBeGreaterThan(0)
-      expect(tool.parametersSchema).toBeDefined()
+      expect(tool.parameters).toBeDefined()
       expect(typeof tool.execute).toBe('function')
     }
   })
@@ -63,14 +66,14 @@ describe('buildMemoryTools', () => {
   // ── memory_save execute tests ────────────────────────────
 
   it('memory_save upserts a memory entry', async () => {
-    const tools = buildMemoryTools(db)
+    const tools = buildMemoryTools(() => db)
     const saveTool = tools.find(t => t.name === 'memory_save')!
 
     const result = await saveTool.execute({
       type: 'fact',
       key: 'preferred-editor',
       value: 'Neovim',
-    })
+    }, mockCtx)
 
     expect(result.success).toBe(true)
     expect(result.output).toContain('preferred-editor')
@@ -83,7 +86,7 @@ describe('buildMemoryTools', () => {
   })
 
   it('memory_save with project parameter', async () => {
-    const tools = buildMemoryTools(db)
+    const tools = buildMemoryTools(() => db)
     const saveTool = tools.find(t => t.name === 'memory_save')!
 
     const result = await saveTool.execute({
@@ -91,7 +94,7 @@ describe('buildMemoryTools', () => {
       key: 'test-framework',
       value: 'vitest',
       project: 'drift',
-    })
+    }, mockCtx)
 
     expect(result.success).toBe(true)
 
@@ -101,7 +104,7 @@ describe('buildMemoryTools', () => {
   })
 
   it('memory_save deduplicates on (project, type, key)', async () => {
-    const tools = buildMemoryTools(db)
+    const tools = buildMemoryTools(() => db)
     const saveTool = tools.find(t => t.name === 'memory_save')!
 
     await saveTool.execute({
@@ -109,14 +112,14 @@ describe('buildMemoryTools', () => {
       key: 'theme',
       value: 'dark',
       project: 'drift',
-    })
+    }, mockCtx)
 
     await saveTool.execute({
       type: 'preference',
       key: 'theme',
       value: 'light',
       project: 'drift',
-    })
+    }, mockCtx)
 
     const rows = db.prepare(
       "SELECT * FROM memory WHERE type = 'preference' AND key = 'theme' AND project = 'drift'"
@@ -127,14 +130,14 @@ describe('buildMemoryTools', () => {
   })
 
   it('memory_save returns error on invalid input', async () => {
-    const tools = buildMemoryTools(db)
+    const tools = buildMemoryTools(() => db)
     const saveTool = tools.find(t => t.name === 'memory_save')!
 
     const result = await saveTool.execute({
       type: 'fact',
       key: '',
       value: 'something',
-    })
+    }, mockCtx)
 
     expect(result.success).toBe(false)
     expect(result.error).toBeDefined()
@@ -152,10 +155,10 @@ describe('buildMemoryTools', () => {
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run('m2', '', 'preference', 'editor', 'vim', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z')
 
-    const tools = buildMemoryTools(db)
+    const tools = buildMemoryTools(() => db)
     const listTool = tools.find(t => t.name === 'memory_list')!
 
-    const result = await listTool.execute({})
+    const result = await listTool.execute({}, mockCtx)
     expect(result.success).toBe(true)
 
     const parsed = JSON.parse(result.output)
@@ -173,10 +176,10 @@ describe('buildMemoryTools', () => {
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run('m2', '', 'preference', 'editor', 'vim', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z')
 
-    const tools = buildMemoryTools(db)
+    const tools = buildMemoryTools(() => db)
     const listTool = tools.find(t => t.name === 'memory_list')!
 
-    const result = await listTool.execute({ type: 'fact' })
+    const result = await listTool.execute({ type: 'fact' }, mockCtx)
     expect(result.success).toBe(true)
 
     const parsed = JSON.parse(result.output)
@@ -194,10 +197,10 @@ describe('buildMemoryTools', () => {
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run('m2', '', 'fact', 'k1', 'v1', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z')
 
-    const tools = buildMemoryTools(db)
+    const tools = buildMemoryTools(() => db)
     const listTool = tools.find(t => t.name === 'memory_list')!
 
-    const result = await listTool.execute({})
+    const result = await listTool.execute({}, mockCtx)
     expect(result.success).toBe(true)
 
     const parsed = JSON.parse(result.output)

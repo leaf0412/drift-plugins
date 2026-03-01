@@ -1,9 +1,7 @@
-import type { DriftToolRegistration, DriftToolResult } from '@drift/core'
+import type { DriftTool, ToolResult, PluginContext } from '@drift/core/kernel'
 import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
 import dayjs from 'dayjs'
-
-type ToolRegistration = Omit<DriftToolRegistration, 'pluginId' | 'source'>
 
 interface MemoryRow {
   id: string
@@ -16,19 +14,19 @@ interface MemoryRow {
 }
 
 /**
- * Build the 2 memory tool definitions for ctx.register('tool.<name>', handler).
+ * Build the 2 memory tool definitions for declarative tools[] on DriftPlugin.
  *
  * - memory_save  — upsert a structured fact into the memory table
  * - memory_list  — query saved memories with optional filters
  */
-export function buildMemoryTools(db: Database.Database): ToolRegistration[] {
+export function buildMemoryTools(getDb: () => Database.Database): DriftTool[] {
   return [
     // ── memory_save ────────────────────────────────────────────
     {
       name: 'memory_save',
       description:
         'Save a structured fact to long-term memory. Upserts on (project, type, key) — if the same combination exists, the value is updated.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           type: {
@@ -51,7 +49,8 @@ export function buildMemoryTools(db: Database.Database): ToolRegistration[] {
         },
         required: ['type', 'key', 'value'],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, _ctx: PluginContext): Promise<ToolResult> {
+        const db = getDb()
         try {
           const { type, key, value, project } = args as {
             type: string
@@ -92,7 +91,7 @@ export function buildMemoryTools(db: Database.Database): ToolRegistration[] {
       name: 'memory_list',
       description:
         'List saved memories with optional filters. Returns entries ordered by most recently updated. Excludes internal project_scan entries.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           type: {
@@ -110,7 +109,8 @@ export function buildMemoryTools(db: Database.Database): ToolRegistration[] {
         },
         required: [],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, _ctx: PluginContext): Promise<ToolResult> {
+        const db = getDb()
         try {
           const { type, q, limit } = args as {
             type?: string

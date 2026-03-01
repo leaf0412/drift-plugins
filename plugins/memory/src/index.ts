@@ -16,11 +16,15 @@ import { ensureMemoryDigestAgent } from './digest-agent.js'
  * initialised for auto-embed on memory creation and /api/recall.
  */
 export function createMemoryPlugin(embeddingConfig?: EmbeddingConfig): DriftPlugin {
+  let db: Database.Database | null = null
+
   return {
     name: 'memory',
 
+    tools: buildMemoryTools(() => db!),
+
     async init(ctx: PluginContext) {
-      const db = await ctx.call<Database.Database>('sqlite.db')
+      db = await ctx.call<Database.Database>('sqlite.db')
       const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
 
       const embedSvc = embeddingConfig
@@ -28,13 +32,6 @@ export function createMemoryPlugin(embeddingConfig?: EmbeddingConfig): DriftPlug
         : null
 
       registerMemoryRoutes(app, { db, embedSvc })
-
-      // Register agent tools
-      const tools = buildMemoryTools(db)
-      for (const tool of tools) {
-        ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
-      }
-      ctx.logger.debug(`Memory: ${tools.length} tools registered`)
 
       // Install memory-digest agent definition if mind.dir is available
       try {
