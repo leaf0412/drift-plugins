@@ -1,15 +1,15 @@
-import type { DriftPlugin, PluginManifest, PluginContext } from '@drift/core'
+import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
 import type { DriftChannel, InboundMessage } from '@drift/plugins'
-import { getChatHandle, getChatPending, getHttpApp } from '@drift/plugins'
+import type { Hono } from 'hono'
 import { getChannelRouter } from '../../channel/src/index.js'
 import { chatEventsToSse } from './sse.js'
 
-// ── Plugin Manifest ──────────────────────────────────────────
+// ── Manifest (kept for backward compat with existing tests) ──
 
-const manifest: PluginManifest = {
+const manifest = {
   name: 'web-channel',
   version: '1.0.0',
-  type: 'code',
+  type: 'code' as const,
   capabilities: {
     routes: ['/api/chat'],
     channels: ['web'],
@@ -19,15 +19,16 @@ const manifest: PluginManifest = {
 
 // ── Plugin Factory ───────────────────────────────────────────
 
-export function createWebChannelPlugin(): DriftPlugin {
+export function createWebChannelPlugin(): DriftPlugin & { manifest: typeof manifest } {
   return {
+    name: 'web-channel',
     manifest,
 
     async init(ctx: PluginContext) {
       const router = getChannelRouter(ctx)
-      const chatHandle = getChatHandle(ctx)
-      const pendingApprovals = getChatPending(ctx)
-      const app = getHttpApp(ctx)
+      const chatHandle = await ctx.call<Function>('chat.handle')
+      const pendingApprovals = await ctx.call<any>('chat.pending')
+      const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
 
       // Register as a DriftChannel on the ChannelRouter
       const webChannel: DriftChannel = {
@@ -118,3 +119,5 @@ export function createWebChannelPlugin(): DriftPlugin {
     },
   }
 }
+
+export default createWebChannelPlugin

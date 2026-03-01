@@ -1,4 +1,4 @@
-import type { DriftPlugin, PluginManifest, PluginContext } from '@drift/core'
+import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
 import {
   getStorageDb,
   getHttpApp,
@@ -12,7 +12,7 @@ import {
   unifiedSearch,
 } from '@drift/plugins'
 
-const manifest: PluginManifest = {
+const manifest = {
   name: 'session-api',
   version: '1.0.0',
   type: 'code',
@@ -24,11 +24,27 @@ const manifest: PluginManifest = {
 
 export function createSessionApiPlugin(): DriftPlugin {
   return {
+    name: 'session-api',
     manifest,
 
     async init(ctx: PluginContext) {
-      const db = getStorageDb(ctx)
-      const app = getHttpApp(ctx)
+      let db: ReturnType<typeof getStorageDb>
+      try {
+        db = await ctx.call<ReturnType<typeof getStorageDb>>('sqlite.db')
+      } catch {
+        const atom = (ctx as any).atoms?.atom?.('storage.db', null)
+        db = atom?.deref?.()
+        if (!db) throw new Error('Storage plugin not initialized')
+      }
+
+      let app: ReturnType<typeof getHttpApp>
+      try {
+        app = await ctx.call<ReturnType<typeof getHttpApp>>('http.app', { pluginId: ctx.pluginId })
+      } catch {
+        const atom = (ctx as any).atoms?.atom?.('http.app', null)
+        app = atom?.deref?.()
+        if (!app) throw new Error('HTTP plugin not initialized')
+      }
 
       // ── GET /api/sessions ───────────────────────────────────
       app.get('/api/sessions', (c) => {
@@ -134,3 +150,5 @@ export function createSessionApiPlugin(): DriftPlugin {
     },
   }
 }
+
+export default createSessionApiPlugin
