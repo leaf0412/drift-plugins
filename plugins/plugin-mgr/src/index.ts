@@ -4,14 +4,14 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { scanPluginDirs } from '@drift/core'
-import type { DriftPlugin, DriftToolResult, PluginContext, PluginManifest } from '@drift/core'
+import type { DriftPlugin, DriftToolResult, PluginContext } from '@drift/core'
 import type { PluginMgrOptions, PluginInfo } from './types.js'
 
 export type { PluginMgrOptions, PluginInfo } from './types.js'
 
 // ── Manifest ──────────────────────────────────────────────────
 
-const manifest: PluginManifest = {
+const manifest = {
   name: 'plugin-mgr',
   version: '1.0.0',
   type: 'code',
@@ -32,11 +32,17 @@ interface ToolRegistration {
   execute: (args: unknown) => Promise<DriftToolResult>
 }
 
+// ── Emit shim type ────────────────────────────────────────────
+
+interface EmitFn {
+  (event: string, data?: unknown): Promise<void> | void
+}
+
 // ── Tool Builders ─────────────────────────────────────────────
 
 function buildTools(
   options: PluginMgrOptions,
-  events: PluginContext['events'],
+  emitFn: EmitFn,
 ): ToolRegistration[] {
   const { pluginsDir, builtinNames } = options
 
@@ -129,7 +135,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
           writeFileSync(join(dir, 'plugin.yaml'), yaml, 'utf-8')
         }
 
-        await events.emit('plugin.created', { name, type })
+        await emitFn('plugin.created', { name, type })
         return { success: true, output: `Plugin "${name}" created (${type}) at ${dir}` }
       },
     },
@@ -229,14 +235,14 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         const mdPath = join(dir, 'plugin.md')
         if (existsSync(mdPath)) {
           writeFileSync(mdPath, content, 'utf-8')
-          await events.emit('plugin.updated', { name, type: 'declarative' })
+          await emitFn('plugin.updated', { name, type: 'declarative' })
           return { success: true, output: `Plugin "${name}" updated (declarative)` }
         }
 
         const tsPath = join(dir, 'index.ts')
         if (existsSync(tsPath)) {
           writeFileSync(tsPath, content, 'utf-8')
-          await events.emit('plugin.updated', { name, type: 'code' })
+          await emitFn('plugin.updated', { name, type: 'code' })
           return { success: true, output: `Plugin "${name}" updated (code)` }
         }
 
@@ -268,7 +274,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         }
 
         rmSync(dir, { recursive: true, force: true })
-        await events.emit('plugin.deleted', { name })
+        await emitFn('plugin.deleted', { name })
         return { success: true, output: `Plugin "${name}" deleted` }
       },
     },
@@ -291,12 +297,12 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
           if (isBuiltin(name)) {
             return { success: false, output: '', error: `Cannot reload builtin plugin "${name}"` }
           }
-          await events.emit('plugin.reload', { name })
+          await emitFn('plugin.reload', { name })
           return { success: true, output: `Reload triggered for plugin "${name}"` }
         }
 
         // Reload all
-        await events.emit('plugin.reload-all', {})
+        await emitFn('plugin.reload-all', {})
         return { success: true, output: 'Reload triggered for all external plugins' }
       },
     },
@@ -311,6 +317,7 @@ export function createPluginMgrPlugin(options?: PluginMgrOptions): DriftPlugin {
     builtinNames: [],
   }
   return {
+    name: 'plugin-mgr',
     manifest,
 
     async init(ctx: PluginContext) {
@@ -319,16 +326,28 @@ export function createPluginMgrPlugin(options?: PluginMgrOptions): DriftPlugin {
         mkdirSync(opts.pluginsDir, { recursive: true })
       }
 
-      // Register tools via ctx.registerTool if available
-      if (ctx.registerTool) {
-        const tools = buildTools(opts, ctx.events)
-        for (const tool of tools) {
-          ctx.registerTool(tool)
+      // Build emit shim that works with both old and new ctx
+      const emitFn: EmitFn = (event: string, data?: unknown) => {
+        if (typeof ctx.emit === 'function') {
+          return ctx.emit(event, data)
         }
+        return (ctx as any).events?.emit?.(event, data)
+      }
+
+      const tools = buildTools(opts, emitFn)
+      for (const tool of tools) {
+        if (typeof ctx.register === 'function') {
+          ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
+        } else if ((ctx as any).registerTool) {
+          (ctx as any).registerTool(tool)
+        }
+      }
+
+      if (typeof ctx.logger?.info === 'function') {
         ctx.logger.info(`plugin-mgr: ${tools.length} tools registered`)
-      } else {
-        ctx.logger.warn('plugin-mgr: registerTool not available, skipping tool registration')
       }
     },
   }
 }
+
+export default createPluginMgrPlugin

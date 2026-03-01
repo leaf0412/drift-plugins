@@ -1,21 +1,9 @@
-import type { DriftPlugin, PluginManifest, PluginContext } from '@drift/core'
-import { getStorageDb, getHttpApp } from '@drift/plugins'
+import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
+import type { Hono } from 'hono'
+import type Database from 'better-sqlite3'
 import { registerTaskRoutes } from './routes.js'
 import { buildTaskTools } from './tools.js'
 import { checkReminders } from './reminder.js'
-
-// ── Manifest ──────────────────────────────────────────────
-
-const manifest: PluginManifest = {
-  name: 'task',
-  version: '1.0.0',
-  type: 'code',
-  capabilities: {
-    routes: ['/api/tasks', '/api/tasks/:id'],
-    events: { emit: ['task.reminder', 'task.created', 'task.completed'] },
-  },
-  depends: ['storage', 'http'],
-}
 
 // ── Plugin Factory ────────────────────────────────────────
 
@@ -26,36 +14,37 @@ const manifest: PluginManifest = {
 export function createTaskPlugin(): DriftPlugin {
   let timer: ReturnType<typeof setInterval> | null = null
   let savedCtx: PluginContext | null = null
+  let savedDb: Database.Database | null = null
 
   return {
-    manifest,
+    name: 'task',
+    requiresCapabilities: ['sqlite.db', 'http.app'],
 
     async init(ctx: PluginContext) {
       savedCtx = ctx
-      const db = getStorageDb(ctx)
-      const app = getHttpApp(ctx)
+      const db = await ctx.call<Database.Database>('sqlite.db')
+      savedDb = db
+      const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
 
       registerTaskRoutes(app, db)
 
-      // Register agent tools via PluginRegistry
-      if (ctx.registerTool) {
-        const tools = buildTaskTools(db)
-        for (const tool of tools) {
-          ctx.registerTool(tool)
-        }
-        ctx.logger.debug(`Task: ${tools.length} tools registered via ctx.registerTool`)
+      // Register agent tools via ctx.register
+      const tools = buildTaskTools(db)
+      for (const tool of tools) {
+        ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
       }
+      ctx.logger.debug(`Task: ${tools.length} tools registered`)
 
       ctx.logger.info('Task plugin initialized')
     },
 
     async start() {
       const ctx = savedCtx!
-      const db = getStorageDb(ctx)
+      const db = savedDb!
 
       timer = setInterval(async () => {
         try {
-          const count = await checkReminders(db, ctx.events.emit.bind(ctx.events))
+          const count = await checkReminders(db, ctx.emit.bind(ctx))
           if (count > 0) {
             ctx.logger.info(`Task: ${count} reminder(s) sent`)
           }
@@ -75,6 +64,8 @@ export function createTaskPlugin(): DriftPlugin {
     },
   }
 }
+
+export default createTaskPlugin
 
 // ── Re-exports ────────────────────────────────────────────
 

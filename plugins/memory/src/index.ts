@@ -1,5 +1,4 @@
-import type { DriftPlugin, PluginManifest, PluginContext } from '@drift/core'
-import { getStorageDb, getHttpApp } from '@drift/plugins'
+import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
 import { createEmbeddingService, type EmbeddingConfig } from './embeddings.js'
 import { registerMemoryRoutes } from './routes.js'
 import { buildMemoryTools } from './tools.js'
@@ -7,7 +6,7 @@ import { ensureMemoryDigestAgent } from './digest-agent.js'
 
 // ── Manifest ──────────────────────────────────────────────
 
-const manifest: PluginManifest = {
+const manifest = {
   name: 'memory',
   version: '1.0.0',
   type: 'code',
@@ -29,11 +28,27 @@ const manifest: PluginManifest = {
  */
 export function createMemoryPlugin(embeddingConfig?: EmbeddingConfig): DriftPlugin {
   return {
+    name: 'memory',
     manifest,
 
     async init(ctx: PluginContext) {
-      const db = getStorageDb(ctx)
-      const app = getHttpApp(ctx)
+      let db: any
+      try {
+        db = await ctx.call<any>('sqlite.db')
+      } catch {
+        const atom = (ctx as any).atoms?.atom?.('storage.db', null)
+        db = atom?.deref?.()
+        if (!db) throw new Error('Storage plugin not initialized')
+      }
+
+      let app: any
+      try {
+        app = await ctx.call<any>('http.app', { pluginId: ctx.pluginId })
+      } catch {
+        const atom = (ctx as any).atoms?.atom?.('http.app', null)
+        app = atom?.deref?.()
+        if (!app) throw new Error('HTTP plugin not initialized')
+      }
 
       const embedSvc = embeddingConfig
         ? createEmbeddingService(embeddingConfig)
@@ -41,18 +56,26 @@ export function createMemoryPlugin(embeddingConfig?: EmbeddingConfig): DriftPlug
 
       registerMemoryRoutes(app, { db, embedSvc })
 
-      // Register agent tools via PluginRegistry
-      if (ctx.registerTool) {
-        const tools = buildMemoryTools(db)
-        for (const tool of tools) {
-          ctx.registerTool(tool)
+      // Register agent tools
+      const tools = buildMemoryTools(db)
+      for (const tool of tools) {
+        if (typeof ctx.register === 'function') {
+          ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
+        } else if ((ctx as any).registerTool) {
+          (ctx as any).registerTool(tool)
         }
-        ctx.logger.debug(`Memory: ${tools.length} tools registered via ctx.registerTool`)
       }
+      ctx.logger.debug(`Memory: ${tools.length} tools registered`)
 
       // Install memory-digest agent definition if mind.dir is available
       try {
-        const mindDir = ctx.atoms.atom<string>('mind.dir', '').deref()
+        let mindDir: string | undefined
+        try {
+          mindDir = await ctx.call<string>('mind.dir')
+        } catch {
+          const atom = (ctx as any).atoms?.atom?.('mind.dir', '')
+          mindDir = atom?.deref?.()
+        }
         if (mindDir) {
           ensureMemoryDigestAgent(mindDir)
           ctx.logger.debug('Memory: ensured memory-digest agent definition')
@@ -67,6 +90,8 @@ export function createMemoryPlugin(embeddingConfig?: EmbeddingConfig): DriftPlug
     },
   }
 }
+
+export default createMemoryPlugin
 
 // ── Re-exports ────────────────────────────────────────────
 

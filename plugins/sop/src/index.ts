@@ -1,5 +1,5 @@
 // sop/index.ts — SOP plugin factory
-import type { DriftPlugin, PluginManifest, PluginContext } from '@drift/core'
+import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
 import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseSopFile } from './parser.js'
@@ -8,7 +8,7 @@ import type { Sop } from './types.js'
 
 // ── Manifest ──────────────────────────────────────────────────
 
-const manifest: PluginManifest = {
+const manifest = {
   name: 'sop',
   version: '1.0.0',
   type: 'code',
@@ -47,12 +47,19 @@ function loadSopsFromDir(sopDir: string, logger: PluginContext['logger']): Map<s
 
 // ── Tool Builders ─────────────────────────────────────────────
 
-type SopToolDef = NonNullable<Parameters<NonNullable<PluginContext['registerTool']>>[0]>
+interface SopToolDef {
+  name: string
+  description: string
+  parametersSchema: Record<string, unknown>
+  execute: (args: unknown) => Promise<{ success: boolean; output: string; error?: string }>
+}
+
+type EmitFn = (event: string, data?: unknown) => Promise<void> | void
 
 function buildSopTools(
   getRegistry: () => Map<string, Sop>,
   executor: SopExecutor,
-  events: PluginContext['events'],
+  emitFn: EmitFn,
 ): SopToolDef[] {
   return [
     // sop_list — list all available SOPs
@@ -98,7 +105,7 @@ function buildSopTools(
         }
 
         const exec = executor.start(sop)
-        await events.emit('sop.started', { sopSlug: sop.slug, executionId: exec.id })
+        await emitFn('sop.started', { sopSlug: sop.slug, executionId: exec.id })
 
         // No-op step runner — in real usage this would be injected by the agent plugin
         // The executor state machine advances; actual LLM execution is done externally
@@ -106,11 +113,11 @@ function buildSopTools(
         const result = await executor.run(exec.id, sop, noopRunner)
 
         if (result.status === 'completed') {
-          await events.emit('sop.completed', { sopSlug: sop.slug, executionId: exec.id })
+          await emitFn('sop.completed', { sopSlug: sop.slug, executionId: exec.id })
         } else if (result.status === 'failed') {
-          await events.emit('sop.failed', { sopSlug: sop.slug, executionId: exec.id, reason: result.failureReason })
+          await emitFn('sop.failed', { sopSlug: sop.slug, executionId: exec.id, reason: result.failureReason })
         } else if (result.status === 'awaiting_approval') {
-          await events.emit('sop.paused', { sopSlug: sop.slug, executionId: exec.id, currentStep: result.currentStep })
+          await emitFn('sop.paused', { sopSlug: sop.slug, executionId: exec.id, currentStep: result.currentStep })
         }
 
         return { success: true, output: JSON.stringify(result) }
@@ -173,6 +180,7 @@ export function createSopPlugin(mindDir?: string): DriftPlugin {
   const executor = new SopExecutor()
 
   return {
+    name: 'sop',
     manifest,
 
     async init(ctx: PluginContext) {
@@ -185,25 +193,49 @@ export function createSopPlugin(mindDir?: string): DriftPlugin {
       registry = loadSopsFromDir(sopDir, ctx.logger)
       ctx.logger.info(`SOP plugin initialized: ${registry.size} SOP(s) loaded`)
 
-      // Publish registry atom for inter-plugin access
-      ctx.atoms.atom<Map<string, Sop>>('sop.registry', new Map()).reset(registry)
-
-      // Register tools via ctx.registerTool if available
-      if (ctx.registerTool) {
-        const tools = buildSopTools(() => registry, executor, ctx.events)
-        for (const tool of tools) {
-          ctx.registerTool(tool)
-        }
-        ctx.logger.debug(`SOP: ${tools.length} tools registered`)
+      // Publish registry — support both new (ctx.register) and old (ctx.atoms) style
+      if (typeof ctx.register === 'function') {
+        ctx.register('sop.registry', () => registry)
       }
+      // Always set atoms for backward compat with tests and other plugins
+      const atomsObj = (ctx as any).atoms
+      if (atomsObj?.atom) {
+        atomsObj.atom<Map<string, Sop>>('sop.registry', new Map()).reset(registry)
+      }
+
+      // Build emit shim
+      const emitFn: EmitFn = (event: string, data?: unknown) => {
+        if (typeof ctx.emit === 'function') {
+          return ctx.emit(event, data)
+        }
+        return (ctx as any).events?.emit?.(event, data)
+      }
+
+      // Register tools — support both new (ctx.register) and old (ctx.registerTool) style
+      const tools = buildSopTools(() => registry, executor, emitFn)
+      for (const tool of tools) {
+        if (typeof ctx.register === 'function') {
+          ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
+        }
+        if ((ctx as any).registerTool) {
+          (ctx as any).registerTool(tool)
+        }
+      }
+      ctx.logger.debug(`SOP: ${tools.length} tools registered`)
     },
   }
 }
 
+export default createSopPlugin
+
 // ── Atom Accessor ────────────────────────────────────────────
 
 export function getSopRegistry(ctx: PluginContext): Map<string, Sop> {
-  return ctx.atoms.atom<Map<string, Sop>>('sop.registry', new Map()).deref()
+  const atomsObj = (ctx as any).atoms
+  if (atomsObj?.atom) {
+    return atomsObj.atom<Map<string, Sop>>('sop.registry', new Map()).deref()
+  }
+  return new Map()
 }
 
 // ── Re-exports ───────────────────────────────────────────────
