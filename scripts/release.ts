@@ -35,12 +35,24 @@ const PLUGINS = [
 
 const ROOT = execSync('git rev-parse --show-toplevel', { encoding: 'utf-8' }).trim()
 
-const TS_VERSION_RE = /version:\s*'(\d+\.\d+\.\d+)'/
+const TS_VERSION_RE = /(?<=name:\s*'[^']+',\s*\n\s*)version:\s*'(\d+\.\d+\.\d+)'/
 const JSON_VERSION_RE = /"version":\s*"(\d+\.\d+\.\d+)"/
 
 type BumpKind = 'patch' | 'minor' | 'major'
 
 // ── CLI args ───────────────────────────────────────────────
+
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  console.log(`
+  drift-plugins release script
+
+  Usage:
+    pnpm release            Interactive release
+    pnpm release --dry-run  Preview only, no writes
+    pnpm release --help     Show this help
+`)
+  process.exit(0)
+}
 
 const dryRun = process.argv.includes('--dry-run')
 
@@ -198,7 +210,7 @@ async function main() {
 
   // Create a promise that rejects when the readline interface closes (EOF)
   let eofActive = true
-  let onRlClose: () => void
+  let onRlClose = () => {}
   const rlClosedPromise = new Promise<never>((_, reject) => {
     onRlClose = () => reject(new Error('EOF'))
   })
