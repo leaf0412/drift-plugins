@@ -1,16 +1,22 @@
-import type { PluginContext } from '@drift/core/kernel'
+/**
+ * Minimal context interface for bridging between old daemon context and new plugin patterns.
+ */
+interface BridgeCtx {
+  atoms: { atom<T>(key: string, initial: T): { deref(): T } }
+  logger: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void }
+}
 
 export function createUsagePlugin() {
   return {
     name: 'usage',
     version: '0.1.0',
 
-    async init(ctx: PluginContext) {
+    async init(ctx: BridgeCtx) {
       // Get HTTP app from atoms (old daemon doesn't support ctx.call)
-      const { getHttpApp, getStorageDb } = await import('@drift/plugins')
       let app: any
       try {
-        app = getHttpApp(ctx)
+        const plugins = await import('@drift/plugins') as any
+        app = plugins.getHttpApp(ctx)
       } catch {
         ctx.logger.warn('usage: HTTP app not available, skipping route')
         return
@@ -21,7 +27,8 @@ export function createUsagePlugin() {
 
         let db: any
         try {
-          db = getStorageDb(ctx)
+          const plugins = await import('@drift/plugins') as any
+          db = plugins.getStorageDb(ctx)
         } catch {
           return c.json({
             today: { promptTokens: 0, completionTokens: 0, sessions: 0 },

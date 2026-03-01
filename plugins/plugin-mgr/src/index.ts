@@ -1,20 +1,43 @@
 // plugin-mgr/index.ts — Plugin Manager: Agent tools for CRUD on user plugins
 import {
-  existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync,
+  existsSync, mkdirSync, readFileSync, writeFileSync, rmSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import { scanPluginDirs } from '@drift/core'
-import type { PluginContext, DriftTool, ToolResult } from '@drift/core/kernel'
-import type { Hono } from 'hono'
 import type { PluginMgrOptions, PluginInfo } from './types.js'
 import { registerPluginMgrRoutes } from './routes.js'
 
 export type { PluginMgrOptions, PluginInfo } from './types.js'
 
+/**
+ * Minimal context interface for bridging between old daemon context and new plugin patterns.
+ * At runtime the daemon passes its PluginContext which has atoms, events, registerTool, logger.
+ */
+interface BridgeCtx {
+  atoms: { atom<T>(key: string, initial: T): { deref(): T } }
+  events: { emit(event: string, data?: unknown): void }
+  logger: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void }
+  registerTool?: (reg: { name: string; description: string; parametersSchema: unknown; execute: (args: unknown) => Promise<unknown> }) => void
+}
+
+// ── Tool Result ───────────────────────────────────────────────
+
+interface ToolResult {
+  success: boolean
+  output: string
+  error?: string
+}
+
+interface ToolDef {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+  execute: (args: unknown, ctx: BridgeCtx) => Promise<ToolResult>
+}
 
 // ── Tool Builders ─────────────────────────────────────────────
 
-function buildTools(options: PluginMgrOptions): DriftTool[] {
+function buildTools(options: PluginMgrOptions): ToolDef[] {
   const { pluginsDir, builtinNames } = options
 
   function isBuiltin(name: string): boolean {
@@ -81,7 +104,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         },
         required: ['name', 'type', 'content'],
       },
-      async execute(args: unknown, ctx: PluginContext): Promise<ToolResult> {
+      async execute(args: unknown, ctx: BridgeCtx): Promise<ToolResult> {
         const { name, type, content, manifest: yamlContent } = args as {
           name: string; type: 'declarative' | 'code'; content: string; manifest?: string
         }
@@ -120,7 +143,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         properties: {},
         required: [],
       },
-      async execute(_args: unknown, _ctx: PluginContext): Promise<ToolResult> {
+      async execute(_args: unknown, _ctx: BridgeCtx): Promise<ToolResult> {
         if (!existsSync(pluginsDir)) {
           return { success: true, output: JSON.stringify([]) }
         }
@@ -150,7 +173,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         },
         required: ['name'],
       },
-      async execute(args: unknown, _ctx: PluginContext): Promise<ToolResult> {
+      async execute(args: unknown, _ctx: BridgeCtx): Promise<ToolResult> {
         const { name } = args as { name: string }
         const dir = pluginDir(name)
 
@@ -190,7 +213,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         },
         required: ['name', 'content'],
       },
-      async execute(args: unknown, ctx: PluginContext): Promise<ToolResult> {
+      async execute(args: unknown, ctx: BridgeCtx): Promise<ToolResult> {
         const { name, content } = args as { name: string; content: string }
 
         if (isBuiltin(name)) {
@@ -232,7 +255,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         },
         required: ['name'],
       },
-      async execute(args: unknown, ctx: PluginContext): Promise<ToolResult> {
+      async execute(args: unknown, ctx: BridgeCtx): Promise<ToolResult> {
         const { name } = args as { name: string }
 
         if (isBuiltin(name)) {
@@ -261,7 +284,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         },
         required: [],
       },
-      async execute(args: unknown, ctx: PluginContext): Promise<ToolResult> {
+      async execute(args: unknown, ctx: BridgeCtx): Promise<ToolResult> {
         const { name } = (args as { name?: string }) || {}
 
         if (name) {
@@ -291,23 +314,23 @@ export function createPluginMgrPlugin(options?: PluginMgrOptions) {
     name: 'plugin-mgr',
     version: '1.2.0',
 
-    async init(ctx: PluginContext) {
+    async init(ctx: BridgeCtx) {
       // Ensure plugins directory exists
       if (!existsSync(opts.pluginsDir)) {
         mkdirSync(opts.pluginsDir, { recursive: true })
       }
 
       // Get HTTP app via atom (old daemon doesn't support ctx.call)
-      const { getHttpApp } = await import('@drift/plugins')
-      let app: Hono
+      let app: any
       try {
-        app = getHttpApp(ctx)
+        const plugins = await import('@drift/plugins') as any
+        app = plugins.getHttpApp(ctx)
       } catch {
         ctx.logger.warn('plugin-mgr: HTTP app not available, skipping routes')
         return
       }
 
-      // Get PluginManager from atoms (typed as any since PM type may not be in @drift/core yet)
+      // Get PluginManager from atoms
       const pm = ctx.atoms.atom<any>('core.pluginManager', null).deref()
 
       // Register HTTP routes
