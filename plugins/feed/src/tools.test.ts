@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '@drift/plugins'
-import { buildFeedTools } from './tools.js'
 import type { PluginContext } from '@drift/core/kernel'
+import { buildFeedTools } from './tools.js'
 
 // ── Helpers ─────────────────────────────────────────────────
 
