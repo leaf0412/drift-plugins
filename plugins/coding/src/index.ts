@@ -8,11 +8,21 @@ import { buildCodingTools } from './tools.js'
 
 export function createCodingPlugin(): DriftPlugin {
   const workspaceMap = new Map<string, string>()
+  let warnLog: ((msg: string) => void) | null = null
 
   return {
     name: 'coding',
 
+    tools: buildCodingTools(() => {
+      if (workspaceMap.size === 0) return null
+      if (workspaceMap.size > 1) {
+        warnLog?.(`Coding: ${workspaceMap.size} concurrent sessions, using first workspace`)
+      }
+      return [...workspaceMap.values()][0]
+    }),
+
     async init(ctx: PluginContext) {
+      warnLog = (msg) => ctx.logger.warn(msg)
       const db = await ctx.call<Database.Database>('sqlite.db')
       const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
 
@@ -32,19 +42,6 @@ export function createCodingPlugin(): DriftPlugin {
           else workspaceMap.delete(sessionId)
         },
       })
-
-      // Register git tools as capabilities via ctx.register
-      const tools = buildCodingTools(() => {
-        if (workspaceMap.size === 0) return null
-        if (workspaceMap.size > 1) {
-          ctx.logger.warn(`Coding: ${workspaceMap.size} concurrent sessions, using first workspace`)
-        }
-        return [...workspaceMap.values()][0]
-      })
-      for (const tool of tools) {
-        ctx.register(`tool.${tool.name}`, async (args) => tool.execute(args))
-      }
-      ctx.logger.debug(`Coding: ${tools.length} tools registered`)
 
       ctx.logger.info('Coding plugin initialized')
     },

@@ -1,9 +1,7 @@
-import type { DriftToolRegistration, DriftToolResult } from '@drift/core'
+import type { DriftTool, ToolResult, PluginContext } from '@drift/core/kernel'
 import { execFileSync } from 'node:child_process'
 import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-
-type ToolRegistration = Omit<DriftToolRegistration, 'pluginId' | 'source'>
 
 function git(args: string[], cwd: string): string {
   return execFileSync('git', args, {
@@ -41,10 +39,10 @@ function buildTree(dir: string, prefix = '', maxDepth = 3, depth = 0): string {
 
 export function buildCodingTools(
   getWorkspacePath: () => string | null,
-): ToolRegistration[] {
+): DriftTool[] {
   const withWorkspace =
-    (fn: (cwd: string, args: any) => DriftToolResult) =>
-    async (args: unknown): Promise<DriftToolResult> => {
+    (fn: (cwd: string, args: any) => ToolResult) =>
+    async (args: unknown, _ctx: PluginContext): Promise<ToolResult> => {
       const cwd = getWorkspacePath()
       if (!cwd)
         return {
@@ -63,7 +61,7 @@ export function buildCodingTools(
     {
       name: 'code_git_status',
       description: 'Show git status of the current coding workspace',
-      parametersSchema: { type: 'object', properties: {}, required: [] },
+      parameters: { type: 'object', properties: {}, required: [] },
       execute: withWorkspace((cwd) => ({
         success: true,
         output: git(['status', '--short'], cwd) || '(clean)',
@@ -73,7 +71,7 @@ export function buildCodingTools(
       name: 'code_git_diff',
       description:
         'Show git diff of current changes. Use --staged for staged changes.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           staged: { type: 'boolean', description: 'Show staged diff' },
@@ -90,7 +88,7 @@ export function buildCodingTools(
     {
       name: 'code_git_commit',
       description: 'Stage all changes and commit with a message',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           message: { type: 'string', description: 'Commit message' },
@@ -107,7 +105,7 @@ export function buildCodingTools(
     {
       name: 'code_git_log',
       description: 'Show recent git log',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           count: {
@@ -128,7 +126,7 @@ export function buildCodingTools(
       name: 'code_tree',
       description:
         'Show project directory tree (excludes .git and node_modules)',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           depth: {
