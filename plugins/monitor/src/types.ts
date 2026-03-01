@@ -55,5 +55,7 @@ export interface SystemSnapshot {
     memoryRSS: number
     heapUsed: number
     heapTotal: number
+    activeSessions?: number
+    loadedPlugins?: string[]
   }
 }
