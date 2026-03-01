@@ -4,30 +4,15 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { scanPluginDirs } from '@drift/core'
-import type { DriftToolResult } from '@drift/core'
-import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
+import type { DriftPlugin, DriftTool, ToolResult, PluginContext } from '@drift/core/kernel'
 import type { PluginMgrOptions, PluginInfo } from './types.js'
 
 export type { PluginMgrOptions, PluginInfo } from './types.js'
 
-// ── Tool Registration Helper Type ─────────────────────────────
-
-interface ToolRegistration {
-  name: string
-  description: string
-  parametersSchema: Record<string, unknown>
-  execute: (args: unknown) => Promise<DriftToolResult>
-}
-
 
 // ── Tool Builders ─────────────────────────────────────────────
 
-type EmitFn = (event: string, data?: unknown) => Promise<void> | void
-
-function buildTools(
-  options: PluginMgrOptions,
-  emitFn: EmitFn,
-): ToolRegistration[] {
+function buildTools(options: PluginMgrOptions): DriftTool[] {
   const { pluginsDir, builtinNames } = options
 
   function isBuiltin(name: string): boolean {
@@ -84,7 +69,7 @@ export default function create(): DriftPlugin {
 }
 \`\`\`
 Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.output(), ctx.memory.save() do NOT exist.`,
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Plugin name (kebab-case, e.g. "weather-query")' },
@@ -94,7 +79,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         },
         required: ['name', 'type', 'content'],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, ctx: PluginContext): Promise<ToolResult> {
         const { name, type, content, manifest: yamlContent } = args as {
           name: string; type: 'declarative' | 'code'; content: string; manifest?: string
         }
@@ -119,7 +104,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
           writeFileSync(join(dir, 'plugin.yaml'), yaml, 'utf-8')
         }
 
-        await emitFn('plugin.created', { name, type })
+        ctx.emit('plugin.created', { name, type })
         return { success: true, output: `Plugin "${name}" created (${type}) at ${dir}` }
       },
     },
@@ -128,12 +113,12 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
     {
       name: 'plugin_list',
       description: 'List all user plugins in the plugins directory. Returns JSON array of plugin info.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {},
         required: [],
       },
-      async execute(): Promise<DriftToolResult> {
+      async execute(_args: unknown, _ctx: PluginContext): Promise<ToolResult> {
         if (!existsSync(pluginsDir)) {
           return { success: true, output: JSON.stringify([]) }
         }
@@ -156,14 +141,14 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
     {
       name: 'plugin_read',
       description: 'Read the source files of a user plugin. Returns plugin.md for declarative or plugin.yaml + index.ts for code plugins.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Plugin name' },
         },
         required: ['name'],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, _ctx: PluginContext): Promise<ToolResult> {
         const { name } = args as { name: string }
         const dir = pluginDir(name)
 
@@ -195,7 +180,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
     {
       name: 'plugin_update',
       description: 'Update an existing user plugin. Overwrites plugin.md for declarative or index.ts for code plugins.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Plugin name' },
@@ -203,7 +188,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         },
         required: ['name', 'content'],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, ctx: PluginContext): Promise<ToolResult> {
         const { name, content } = args as { name: string; content: string }
 
         if (isBuiltin(name)) {
@@ -219,14 +204,14 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         const mdPath = join(dir, 'plugin.md')
         if (existsSync(mdPath)) {
           writeFileSync(mdPath, content, 'utf-8')
-          await emitFn('plugin.updated', { name, type: 'declarative' })
+          ctx.emit('plugin.updated', { name, type: 'declarative' })
           return { success: true, output: `Plugin "${name}" updated (declarative)` }
         }
 
         const tsPath = join(dir, 'index.ts')
         if (existsSync(tsPath)) {
           writeFileSync(tsPath, content, 'utf-8')
-          await emitFn('plugin.updated', { name, type: 'code' })
+          ctx.emit('plugin.updated', { name, type: 'code' })
           return { success: true, output: `Plugin "${name}" updated (code)` }
         }
 
@@ -238,14 +223,14 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
     {
       name: 'plugin_delete',
       description: 'Delete a user plugin directory. Cannot delete builtin plugins.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Plugin name' },
         },
         required: ['name'],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, ctx: PluginContext): Promise<ToolResult> {
         const { name } = args as { name: string }
 
         if (isBuiltin(name)) {
@@ -258,7 +243,7 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
         }
 
         rmSync(dir, { recursive: true, force: true })
-        await emitFn('plugin.deleted', { name })
+        ctx.emit('plugin.deleted', { name })
         return { success: true, output: `Plugin "${name}" deleted` }
       },
     },
@@ -267,26 +252,26 @@ Wrong imports: @drift/agent, @drift-coach/core do NOT exist. Wrong APIs: ctx.out
     {
       name: 'plugin_reload',
       description: 'Hot-reload a plugin or all plugins without restarting the daemon. Stops the old instance, clears cache, re-loads from disk, and re-initializes.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Plugin name to reload. Omit to reload ALL external plugins.' },
         },
         required: [],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, ctx: PluginContext): Promise<ToolResult> {
         const { name } = (args as { name?: string }) || {}
 
         if (name) {
           if (isBuiltin(name)) {
             return { success: false, output: '', error: `Cannot reload builtin plugin "${name}"` }
           }
-          await emitFn('plugin.reload', { name })
+          ctx.emit('plugin.reload', { name })
           return { success: true, output: `Reload triggered for plugin "${name}"` }
         }
 
         // Reload all
-        await emitFn('plugin.reload-all', {})
+        ctx.emit('plugin.reload-all', {})
         return { success: true, output: 'Reload triggered for all external plugins' }
       },
     },
@@ -302,19 +287,13 @@ export function createPluginMgrPlugin(options?: PluginMgrOptions): DriftPlugin {
   }
   return {
     name: 'plugin-mgr',
+    tools: buildTools(opts),
 
-    async init(ctx: PluginContext) {
+    init(_ctx: PluginContext) {
       // Ensure plugins directory exists
       if (!existsSync(opts.pluginsDir)) {
         mkdirSync(opts.pluginsDir, { recursive: true })
       }
-
-      const tools = buildTools(opts, (event, data) => ctx.emit(event, data))
-      for (const tool of tools) {
-        ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
-      }
-
-      ctx.logger.info(`plugin-mgr: ${tools.length} tools registered`)
     },
   }
 }
