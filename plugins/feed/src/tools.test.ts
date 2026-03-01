@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '@drift/plugins'
 import { buildFeedTools } from './tools.js'
+import type { PluginContext } from '@drift/core/kernel'
 
 // ── Helpers ─────────────────────────────────────────────────
 
@@ -16,6 +17,8 @@ function makeDb(): { db: Database.Database; dir: string } {
   db.exec(SCHEMA_SQL)
   return { db, dir }
 }
+
+const mockCtx = {} as PluginContext
 
 // ── Tests ───────────────────────────────────────────────────
 
@@ -37,24 +40,24 @@ describe('buildFeedTools', () => {
   // ── Structure tests ──────────────────────────────────────
 
   it('returns exactly 3 tool definitions', () => {
-    const tools = buildFeedTools(db)
+    const tools = buildFeedTools(() => db)
     expect(tools.length).toBe(3)
   })
 
   it('tool names are feed_subscribe, feed_list, feed_unsubscribe', () => {
-    const tools = buildFeedTools(db)
+    const tools = buildFeedTools(() => db)
     const names = tools.map(t => t.name).sort()
     expect(names).toEqual(['feed_list', 'feed_subscribe', 'feed_unsubscribe'])
   })
 
-  it('each tool has name, description, parametersSchema, and execute', () => {
-    const tools = buildFeedTools(db)
+  it('each tool has name, description, parameters, and execute', () => {
+    const tools = buildFeedTools(() => db)
     for (const tool of tools) {
       expect(typeof tool.name).toBe('string')
       expect(tool.name.length).toBeGreaterThan(0)
       expect(typeof tool.description).toBe('string')
       expect(tool.description.length).toBeGreaterThan(0)
-      expect(tool.parametersSchema).toBeDefined()
+      expect(tool.parameters).toBeDefined()
       expect(typeof tool.execute).toBe('function')
     }
   })
@@ -62,14 +65,14 @@ describe('buildFeedTools', () => {
   // ── feed_subscribe ─────────────────────────────────────────
 
   it('feed_subscribe creates a subscription and returns JSON', async () => {
-    const tools = buildFeedTools(db)
+    const tools = buildFeedTools(() => db)
     const subscribeTool = tools.find(t => t.name === 'feed_subscribe')!
 
     const result = await subscribeTool.execute({
       url: 'https://example.com/feed.xml',
       type: 'rss',
       title: 'Example RSS',
-    })
+    }, mockCtx)
 
     expect(result.success).toBe(true)
 
@@ -87,19 +90,19 @@ describe('buildFeedTools', () => {
   })
 
   it('feed_subscribe returns error when url is missing', async () => {
-    const tools = buildFeedTools(db)
+    const tools = buildFeedTools(() => db)
     const subscribeTool = tools.find(t => t.name === 'feed_subscribe')!
 
-    const result = await subscribeTool.execute({ type: 'rss' })
+    const result = await subscribeTool.execute({ type: 'rss' }, mockCtx)
     expect(result.success).toBe(false)
     expect(result.error).toContain('url is required')
   })
 
   it('feed_subscribe returns error when type is missing', async () => {
-    const tools = buildFeedTools(db)
+    const tools = buildFeedTools(() => db)
     const subscribeTool = tools.find(t => t.name === 'feed_subscribe')!
 
-    const result = await subscribeTool.execute({ url: 'https://example.com' })
+    const result = await subscribeTool.execute({ url: 'https://example.com' }, mockCtx)
     expect(result.success).toBe(false)
     expect(result.error).toContain('type is required')
   })
@@ -107,14 +110,14 @@ describe('buildFeedTools', () => {
   // ── feed_list ──────────────────────────────────────────────
 
   it('feed_list returns subscriptions as JSON array', async () => {
-    const tools = buildFeedTools(db)
+    const tools = buildFeedTools(() => db)
     const subscribeTool = tools.find(t => t.name === 'feed_subscribe')!
     const listTool = tools.find(t => t.name === 'feed_list')!
 
-    await subscribeTool.execute({ url: 'https://a.com/feed', type: 'rss' })
-    await subscribeTool.execute({ url: 'https://b.com/page', type: 'webpage' })
+    await subscribeTool.execute({ url: 'https://a.com/feed', type: 'rss' }, mockCtx)
+    await subscribeTool.execute({ url: 'https://b.com/page', type: 'webpage' }, mockCtx)
 
-    const result = await listTool.execute({})
+    const result = await listTool.execute({}, mockCtx)
     expect(result.success).toBe(true)
 
     const parsed = JSON.parse(result.output)
@@ -123,10 +126,10 @@ describe('buildFeedTools', () => {
   })
 
   it('feed_list returns empty array when no subscriptions', async () => {
-    const tools = buildFeedTools(db)
+    const tools = buildFeedTools(() => db)
     const listTool = tools.find(t => t.name === 'feed_list')!
 
-    const result = await listTool.execute({})
+    const result = await listTool.execute({}, mockCtx)
     expect(result.success).toBe(true)
 
     const parsed = JSON.parse(result.output)
@@ -136,17 +139,17 @@ describe('buildFeedTools', () => {
   // ── feed_unsubscribe ───────────────────────────────────────
 
   it('feed_unsubscribe removes subscription by id', async () => {
-    const tools = buildFeedTools(db)
+    const tools = buildFeedTools(() => db)
     const subscribeTool = tools.find(t => t.name === 'feed_subscribe')!
     const unsubscribeTool = tools.find(t => t.name === 'feed_unsubscribe')!
 
     const createResult = await subscribeTool.execute({
       url: 'https://example.com/rss',
       type: 'rss',
-    })
+    }, mockCtx)
     const created = JSON.parse(createResult.output)
 
-    const result = await unsubscribeTool.execute({ id: created.id })
+    const result = await unsubscribeTool.execute({ id: created.id }, mockCtx)
     expect(result.success).toBe(true)
     expect(result.output).toBe('Unsubscribed')
 
@@ -156,19 +159,19 @@ describe('buildFeedTools', () => {
   })
 
   it('feed_unsubscribe returns error for non-existent id', async () => {
-    const tools = buildFeedTools(db)
+    const tools = buildFeedTools(() => db)
     const unsubscribeTool = tools.find(t => t.name === 'feed_unsubscribe')!
 
-    const result = await unsubscribeTool.execute({ id: 'non-existent' })
+    const result = await unsubscribeTool.execute({ id: 'non-existent' }, mockCtx)
     expect(result.success).toBe(false)
     expect(result.error).toContain('Subscription not found')
   })
 
   it('feed_unsubscribe returns error when id is missing', async () => {
-    const tools = buildFeedTools(db)
+    const tools = buildFeedTools(() => db)
     const unsubscribeTool = tools.find(t => t.name === 'feed_unsubscribe')!
 
-    const result = await unsubscribeTool.execute({})
+    const result = await unsubscribeTool.execute({}, mockCtx)
     expect(result.success).toBe(false)
     expect(result.error).toContain('id is required')
   })

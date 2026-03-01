@@ -1,4 +1,4 @@
-import type { DriftToolRegistration, DriftToolResult } from '@drift/core'
+import type { DriftTool, ToolResult, PluginContext } from '@drift/core/kernel'
 import type Database from 'better-sqlite3'
 import {
   subscribe,
@@ -6,23 +6,21 @@ import {
   unsubscribe,
 } from './service.js'
 
-type ToolRegistration = Omit<DriftToolRegistration, 'pluginId' | 'source'>
-
 /**
- * Build 3 feed tool definitions for ctx.register('tool.<name>', handler).
+ * Build 3 feed tool definitions as declarative DriftTool[].
  *
  * - feed_subscribe   — subscribe to a feed source
  * - feed_list        — list all subscriptions
  * - feed_unsubscribe — remove a subscription by ID
  */
-export function buildFeedTools(db: Database.Database): ToolRegistration[] {
+export function buildFeedTools(getDb: () => Database.Database): DriftTool[] {
   return [
     // ── feed_subscribe ─────────────────────────────────────────
     {
       name: 'feed_subscribe',
       description:
         'Subscribe to a feed source (RSS, webpage, or API). Returns the created subscription as JSON.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           url: {
@@ -45,7 +43,8 @@ export function buildFeedTools(db: Database.Database): ToolRegistration[] {
         },
         required: ['url', 'type'],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, _ctx: PluginContext): Promise<ToolResult> {
+        const db = getDb()
         try {
           const { url, type, title, cron } = args as {
             url?: string
@@ -80,12 +79,13 @@ export function buildFeedTools(db: Database.Database): ToolRegistration[] {
       name: 'feed_list',
       description:
         'List all feed subscriptions. Returns a JSON array ordered by most recently created.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {},
         required: [],
       },
-      async execute(): Promise<DriftToolResult> {
+      async execute(_args: unknown, _ctx: PluginContext): Promise<ToolResult> {
+        const db = getDb()
         try {
           const subs = listSubscriptions(db)
           return { success: true, output: JSON.stringify(subs) }
@@ -100,7 +100,7 @@ export function buildFeedTools(db: Database.Database): ToolRegistration[] {
       name: 'feed_unsubscribe',
       description:
         'Unsubscribe from a feed by subscription ID. Returns "Unsubscribed" on success.',
-      parametersSchema: {
+      parameters: {
         type: 'object',
         properties: {
           id: {
@@ -110,7 +110,8 @@ export function buildFeedTools(db: Database.Database): ToolRegistration[] {
         },
         required: ['id'],
       },
-      async execute(args: unknown): Promise<DriftToolResult> {
+      async execute(args: unknown, _ctx: PluginContext): Promise<ToolResult> {
+        const db = getDb()
         try {
           const { id } = args as { id?: string }
 

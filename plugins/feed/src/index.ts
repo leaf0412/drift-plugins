@@ -11,23 +11,19 @@ import { buildFeedTools } from './tools.js'
  * HTTP routes, and agent tools.
  */
 export function createFeedPlugin(): DriftPlugin {
+  let db: Database.Database | null = null
+
   return {
     name: 'feed',
+    tools: buildFeedTools(() => db!),
 
     async init(ctx: PluginContext) {
-      const db = await ctx.call<Database.Database>('sqlite.db')
+      db = await ctx.call<Database.Database>('sqlite.db')
       const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
-
-      // Register agent tools
-      const tools = buildFeedTools(db)
-      for (const tool of tools) {
-        ctx.register(`tool.${tool.name}`, async (data: unknown) => tool.execute(data))
-      }
-      ctx.logger.debug(`Feed: ${tools.length} tools registered`)
 
       // HTTP route: GET /api/feeds
       app.get('/api/feeds', (c: any) => {
-        const subs = listSubscriptions(db)
+        const subs = listSubscriptions(db!)
         return c.json({ subscriptions: subs })
       })
 
