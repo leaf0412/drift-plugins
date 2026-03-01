@@ -152,6 +152,15 @@ function todayISO(): string {
 async function main() {
   console.log(dryRun ? '\n  DRY RUN - no files will be written\n' : '')
 
+  // 0. Check for clean working tree
+  if (!dryRun) {
+    const status = git('status --porcelain')
+    if (status) {
+      console.error('Working tree is not clean. Please commit or stash changes first.')
+      process.exit(1)
+    }
+  }
+
   // 1. Find last tag (or fall back to initial commit)
   const lastTag = getLastTag()
   const since = lastTag ?? getInitialCommit()
@@ -188,11 +197,12 @@ async function main() {
   const newVersions = new Map<string, string>()
 
   // Create a promise that rejects when the readline interface closes (EOF)
+  let eofActive = true
   let onRlClose: () => void
   const rlClosedPromise = new Promise<never>((_, reject) => {
     onRlClose = () => reject(new Error('EOF'))
   })
-  rl.on('close', () => onRlClose())
+  rl.on('close', () => { if (eofActive) onRlClose() })
 
   /** Ask a question, returning null on EOF */
   async function ask(prompt: string): Promise<string | null> {
@@ -255,6 +265,7 @@ async function main() {
     }
   }
 
+  eofActive = false
   rl.close()
 
   if (bumps.size === 0) {
@@ -298,6 +309,25 @@ async function main() {
     return
   }
 
+  // 5b. Check for duplicate tag
+  const tag = `v${newGlobal}`
+  try {
+    git(`rev-parse ${tag}`)
+    console.error(`\nTag ${tag} already exists. Aborting.`)
+    process.exit(1)
+  } catch {
+    // tag doesn't exist, safe to proceed
+  }
+
+  // 5c. Confirmation prompt
+  const confirmRl = createInterface({ input: stdin, output: stdout })
+  const confirm = await confirmRl.question(`\nProceed with release ${tag}? [y/N] `)
+  confirmRl.close()
+  if (confirm.trim().toLowerCase() !== 'y') {
+    console.log('Aborted.')
+    process.exit(0)
+  }
+
   // 6. Update plugin versions
   for (const [name, ver] of newVersions) {
     updatePluginVersion(name, ver)
@@ -312,7 +342,14 @@ async function main() {
   const changelogPath = `${ROOT}/CHANGELOG.md`
   if (existsSync(changelogPath)) {
     const existing = readFileSync(changelogPath, 'utf-8')
-    writeFileSync(changelogPath, changelogEntry + '\n' + existing)
+    const headerRe = /^#\s+Changelog\s*\n+/
+    const headerMatch = existing.match(headerRe)
+    if (headerMatch) {
+      const rest = existing.slice(headerMatch[0].length)
+      writeFileSync(changelogPath, headerMatch[0] + changelogEntry + '\n' + rest)
+    } else {
+      writeFileSync(changelogPath, changelogEntry + '\n' + existing)
+    }
   } else {
     writeFileSync(changelogPath, '# Changelog\n\n' + changelogEntry + '\n')
   }
@@ -326,10 +363,9 @@ async function main() {
   ]
 
   for (const f of filesToAdd) {
-    git(`add ${f}`)
+    git(`add "${f}"`)
   }
 
-  const tag = `v${newGlobal}`
   git(`commit -m "release: ${tag}"`)
   git(`tag ${tag}`)
 
