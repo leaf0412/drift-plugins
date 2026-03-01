@@ -4,8 +4,6 @@ import type { DriftPlugin, PluginContext } from '@drift/core/kernel'
 import type { Channel, OutgoingMessage } from '@drift/core'
 import type { Context, Hono } from 'hono'
 import type Database from 'better-sqlite3'
-import { readFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
 import { deleteSession, deleteSessionsByPrefix } from '@drift/plugins'
 import type { InboundMessage, ChatEvent } from '@drift/plugins'
 import { TelegramBot } from './bot.js'
@@ -24,39 +22,46 @@ export interface TelegramPluginOptions {
   webhookSecret?: string
 }
 
-// ── Config Loader ─────────────────────────────────────────
-
-function readTelegramConfigFromFile(): TelegramPluginOptions {
-  const dataDir = process.env.DRIFT_DATA_DIR || join(process.env.HOME || '/tmp', '.drift')
-  const configPath = join(dataDir, 'config.json')
-  if (!existsSync(configPath)) return {}
-  try {
-    const raw = JSON.parse(readFileSync(configPath, 'utf-8'))
-    const tg = raw?.channels?.telegram
-    if (!tg?.enabled) return {}
-    return {
-      botToken: tg.botToken,
-      chatId: tg.chatId,
-      allowFrom: tg.allowFrom ?? [],
-      webhookUrl: tg.webhookUrl,
-      webhookSecret: tg.webhookSecret,
-    }
-  } catch { return {} }
-}
-
 // ── Plugin Factory ────────────────────────────────────────
 
 export function createTelegramPlugin(options?: TelegramPluginOptions): DriftPlugin {
-  const opts: TelegramPluginOptions = options ?? readTelegramConfigFromFile()
   let bot: TelegramBot | null = null
   let sendQueue: TelegramSendQueue | null = null
   let savedCtx: PluginContext | null = null
+  // Resolved config: constructor options override, else read from ctx.config in init()
+  let opts: TelegramPluginOptions = options ?? {}
 
   return {
     name: 'telegram',
 
+    configSchema: {
+      botToken:      { type: 'string', description: 'Telegram Bot Token', secret: true, required: true },
+      chatId:        { type: 'string', description: 'Telegram Chat ID' },
+      allowFrom:     { type: 'string[]', description: '允许的 Telegram user ID 列表' },
+      webhookUrl:    { type: 'string', description: 'Webhook URL (留空则用 polling)' },
+      webhookSecret: { type: 'string', description: 'Webhook Secret', secret: true },
+    },
+    requiresCapabilities: ['chat.handle'],
+
     async init(ctx: PluginContext) {
       savedCtx = ctx
+
+      // If no constructor options were provided, read from per-plugin config
+      if (!options) {
+        const botToken = ctx.config.get<string>('botToken')
+        const chatId = ctx.config.get<string>('chatId')
+        const allowFromStr = ctx.config.get<string[]>('allowFrom', [])
+        const webhookUrl = ctx.config.get<string>('webhookUrl')
+        const webhookSecret = ctx.config.get<string>('webhookSecret')
+
+        opts = {
+          botToken,
+          chatId,
+          allowFrom: allowFromStr.map(Number),
+          webhookUrl,
+          webhookSecret,
+        }
+      }
 
       if (!opts.botToken) {
         ctx.logger.warn('Telegram plugin: no botToken configured, skipping')
