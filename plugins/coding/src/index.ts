@@ -12,6 +12,7 @@ export function createCodingPlugin(): DriftPlugin {
 
   return {
     name: 'coding',
+    requiresCapabilities: ['sqlite.db', 'http.app'],
 
     tools: buildCodingTools(() => {
       if (workspaceMap.size === 0) return null

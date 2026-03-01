@@ -15,6 +15,7 @@ import {
 export function createSessionApiPlugin(): DriftPlugin {
   return {
     name: 'session-api',
+    requiresCapabilities: ['sqlite.db', 'http.app'],
 
     async init(ctx: PluginContext) {
       const db = await ctx.call<Database.Database>('sqlite.db')
