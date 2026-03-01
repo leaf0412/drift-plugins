@@ -83,6 +83,8 @@ export function createFeishuPlugin(options?: FeishuPluginOptions): DriftPlugin {
           if (!opts.webhookUrl) return  // WebSocket-only mode, no outbound webhook
           const url = opts.webhookUrl
           const secret = opts.secret
+          const preview = msg.content.slice(0, 60).replace(/\n/g, ' ')
+          ctx.logger.info(`[feishu] send: type=${msg.type}, event=${msg.metadata?.event ?? '-'}, preview="${preview}..."`)
 
           if (msg.type === 'card' && msg.metadata?.card) {
             queue.enqueue(() =>

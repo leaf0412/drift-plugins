@@ -41,7 +41,7 @@ function formatEventContent(event: string, data: unknown): string {
 
 // ── Known event list ──────────────────────────────────────
 
-const SUBSCRIBED_EVENTS = ['chat.complete', 'cron.result', 'cron.notify', 'cron.chat', 'task.reminder'] as const
+const SUBSCRIBED_EVENTS = ['cron.result', 'cron.notify', 'cron.chat', 'task.reminder'] as const
 
 // ── Plugin Factory ────────────────────────────────────────
 
@@ -96,16 +96,19 @@ export function createNotifyPlugin(): DriftPlugin {
       for (const event of SUBSCRIBED_EVENTS) {
         const unsub = ctx.on(event, async (data: unknown) => {
           const channels = await ctx.call<Channel[]>('channel.list').catch(() => [] as Channel[])
+          ctx.logger.info(`[notify] event "${event}" → dispatching to ${channels.length} channel(s)`)
           for (const channel of channels) {
             const obj = data as Record<string, unknown> | undefined
             const title = obj?.jobName as string ?? obj?.title as string ?? event
             const content = formatEventContent(event, data)
             try {
+              ctx.logger.info(`[notify] sending to channel "${channel.name}" (event: ${event}, title: ${title})`)
               await channel.send({
                 type: 'text',
                 content,
                 metadata: { event },
               })
+              ctx.logger.info(`[notify] sent to "${channel.name}" OK`)
               logNotification(db, {
                 channel: channel.name,
                 eventType: event,
@@ -113,6 +116,7 @@ export function createNotifyPlugin(): DriftPlugin {
                 status: 'success',
               })
             } catch (err) {
+              ctx.logger.error(`[notify] send to "${channel.name}" FAILED: ${(err as Error).message}`)
               logNotification(db, {
                 channel: channel.name,
                 eventType: event,
