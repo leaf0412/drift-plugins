@@ -5,6 +5,7 @@
  * messages.  No public domain, no encryption/decryption, no HTTP callback
  * endpoint needed.
  */
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import * as lark from '@larksuiteoapi/node-sdk'
 import type { InboundMessage, ChatEvent } from '@drift/plugins'
@@ -53,6 +54,7 @@ interface FeishuMessageEvent {
 
 const DEDUP_TTL_MS = 5 * 60 * 1000
 const UPDATE_INTERVAL_MS = 1500
+const SEND_RETRY_DELAYS = [2000, 4000, 6000]
 
 // ── Class ────────────────────────────────────────────────
 
@@ -63,6 +65,11 @@ export class FeishuWsClient {
   private startedAt = 0 // reject messages created before this
   private config: FeishuWsConfig
   private deps: FeishuWsDeps
+
+  // Fix #2: per-user concurrency queue
+  private userQueues = new Map<string, Promise<void>>()
+  // Fix #1: session token for /new command
+  private newSessionTokens = new Map<string, string>()
 
   constructor(config: FeishuWsConfig, deps: FeishuWsDeps) {
     this.config = config
@@ -101,10 +108,11 @@ export class FeishuWsClient {
 
   stop(): void {
     if (!this.wsClient) return
-    // SDK WSClient has no explicit close method; nulling out is sufficient
     this.wsClient = null
     this.apiClient = null
     this.processedEvents.clear()
+    this.userQueues.clear()
+    this.newSessionTokens.clear()
     this.deps.logger.info('Feishu bot: stopped')
   }
 
@@ -126,6 +134,21 @@ export class FeishuWsClient {
       this.deps.logger.error('Feishu bot: failed to send message', err)
       return undefined
     }
+  }
+
+  // Fix #3: sendText with retry + exponential backoff
+  private async sendTextWithRetry(chatId: string, text: string): Promise<string | undefined> {
+    for (let attempt = 0; attempt <= SEND_RETRY_DELAYS.length; attempt++) {
+      const msgId = await this.sendText(chatId, text)
+      if (msgId) return msgId
+      if (attempt < SEND_RETRY_DELAYS.length) {
+        const delay = SEND_RETRY_DELAYS[attempt]
+        this.deps.logger.warn(`Feishu bot: sendText failed, retrying in ${delay}ms (attempt ${attempt + 1})`)
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+    }
+    this.deps.logger.error('Feishu bot: sendText exhausted all retries')
+    return undefined
   }
 
   private async updateText(messageId: string, text: string): Promise<void> {
@@ -152,7 +175,19 @@ export class FeishuWsClient {
     }
   }
 
-  // ── Message handler ──────────────────────────────────
+  // ── Concurrency queue ────────────────────────────────
+
+  // Fix #2: per-user promise chain — serializes message processing
+  private enqueueForUser(key: string, task: () => Promise<void>): void {
+    const prev = this.userQueues.get(key) ?? Promise.resolve()
+    const next = prev.then(task, task) // always advance regardless of success/failure
+    this.userQueues.set(key, next)
+    next.then(() => {
+      if (this.userQueues.get(key) === next) this.userQueues.delete(key)
+    })
+  }
+
+  // ── Message handler (thin: dedup + enqueue) ──────────
 
   private async handleIncomingMessage(
     data: FeishuMessageEvent,
@@ -162,11 +197,9 @@ export class FeishuWsClient {
 
     const messageId = msg.message_id
     const chatId = msg.chat_id
-    const msgType = msg.message_type
-    const contentStr = msg.content
     const senderId = sender.sender_id?.open_id
 
-    // Event de-duplication (in-memory, cleared on restart)
+    // Event de-duplication
     if (this.processedEvents.has(messageId)) return
     this.processedEvents.set(messageId, Date.now())
     this.pruneProcessedEvents()
@@ -178,14 +211,14 @@ export class FeishuWsClient {
       return
     }
 
-    // Allow-list check (empty list = allow all)
+    // Allow-list check
     if (allowFrom.length > 0 && senderId && !allowFrom.includes(senderId)) {
       this.deps.logger.debug(`Feishu bot: ignored message from ${senderId} (not in allowFrom)`)
       return
     }
 
-    // Only text messages are supported
-    if (msgType !== 'text') {
+    // Only text messages
+    if (msg.message_type !== 'text') {
       await this.sendText(chatId, '暂只支持文本消息 🙏')
       return
     }
@@ -193,37 +226,59 @@ export class FeishuWsClient {
     // Parse text, strip @mention placeholders
     let text: string
     try {
-      const parsed = JSON.parse(contentStr)
+      const parsed = JSON.parse(msg.content)
       text = (parsed.text as string || '').replace(/@_user_\d+/g, '').trim()
     } catch {
-      text = contentStr
+      text = msg.content
     }
 
     if (!text) return
 
-    // /clear command: reset session context
+    // Fix #2: enqueue to per-user serial queue
+    const queueKey = `${chatId}:${senderId}`
+    this.enqueueForUser(queueKey, () => this.processMessage(chatId, senderId, text))
+  }
+
+  // ── Core message processing (serialized per user) ────
+
+  private async processMessage(chatId: string, senderId: string | undefined, text: string): Promise<void> {
+    const sessionKey = `${chatId}:${senderId}`
+
+    // Fix #6: /new command — start fresh session
+    if (text === '/new') {
+      this.newSessionTokens.set(sessionKey, randomUUID().slice(0, 8))
+      await this.sendTextWithRetry(chatId, '已开启新会话 ✨')
+      return
+    }
+
+    // Fix #7: /clear command — correct prefix scope
     if (text === '/clear') {
-      const prefix = `feishu:${senderId}:`
+      const prefix = `feishu:${chatId}:${senderId}:`
       const count = this.deps.deleteSessionsByPrefix(prefix)
-      await this.sendText(chatId, '上下文已清除 ✨')
+      this.newSessionTokens.delete(sessionKey)
+      await this.sendTextWithRetry(chatId, '上下文已清除 ✨')
       this.deps.logger.info(`Feishu bot: cleared ${count} session(s) with prefix ${prefix}`)
       return
     }
 
     this.deps.logger.info(`Feishu bot: received from ${senderId}: ${text.slice(0, 80)}`)
 
-    // Send a "thinking" placeholder first, then stream-update it
-    const replyMsgId = await this.sendText(chatId, '思考中…')
+    // Fix #3: use retry for the "thinking" placeholder
+    const replyMsgId = await this.sendTextWithRetry(chatId, '思考中…')
 
     try {
-      let segmentContent = ''   // current paragraph text
-      let currentMsgId = replyMsgId  // Feishu message being updated
+      let segmentContent = ''
+      let currentMsgId = replyMsgId
       let lastUpdateAt = 0
       let inToolUse = false
 
+      // Fix #1: stable sessionId based on chatId + senderId
+      const suffix = this.newSessionTokens.get(sessionKey) ?? 'default'
+      const sessionId = `feishu:${chatId}:${senderId}:${suffix}`
+
       const inbound: InboundMessage = {
         channelId: 'feishu',
-        sessionId: '',
+        sessionId,
         content: text,
         metadata: { userId: senderId, cwd: homedir() },
       }
@@ -238,35 +293,47 @@ export class FeishuWsClient {
               await this.updateText(currentMsgId, segmentContent)
             }
             segmentContent = ''
-            currentMsgId = await this.sendText(chatId, '…')
+            currentMsgId = await this.sendTextWithRetry(chatId, '…')
             inToolUse = false
           }
           segmentContent += event.content
 
+          // Fix #5: await updateText
           if (currentMsgId && now - lastUpdateAt >= UPDATE_INTERVAL_MS) {
             lastUpdateAt = now
-            this.updateText(currentMsgId, segmentContent + ' ▍')
+            await this.updateText(currentMsgId, segmentContent + ' ▍')
           }
         } else if (event.type === 'tool_start') {
           inToolUse = true
           const toolName = (event.toolCall as Record<string, unknown>)?.name || 'tool'
+          // Fix #5: await updateText
           if (currentMsgId && now - lastUpdateAt >= UPDATE_INTERVAL_MS) {
             lastUpdateAt = now
-            this.updateText(currentMsgId, (segmentContent || '思考中…') + `\n\n⏳ ${toolName}...`)
+            await this.updateText(currentMsgId, (segmentContent || '思考中…') + `\n\n⏳ ${toolName}...`)
           }
+        } else if (event.type === 'error') {
+          // Fix #4: handle error events
+          this.deps.logger.error('Feishu bot: stream error', (event as Record<string, unknown>).error)
+          const errText = '⚠️ AI 出错，请稍后重试'
+          if (currentMsgId) await this.updateText(currentMsgId, errText)
+          else await this.sendTextWithRetry(chatId, errText)
+          return
         }
       }
 
       // Final segment — remove cursor indicator
       if (currentMsgId && segmentContent) {
         await this.updateText(currentMsgId, segmentContent)
+      } else if (!currentMsgId && segmentContent) {
+        // Fix #3: fallback — send full reply as new message if placeholder failed
+        await this.sendTextWithRetry(chatId, segmentContent)
       }
     } catch (err) {
       this.deps.logger.error('Feishu bot: chat error', err)
       if (replyMsgId) {
         await this.updateText(replyMsgId, '处理消息时出错，请稍后重试')
       } else {
-        await this.sendText(chatId, '处理消息时出错，请稍后重试')
+        await this.sendTextWithRetry(chatId, '处理消息时出错，请稍后重试')
       }
     }
   }
