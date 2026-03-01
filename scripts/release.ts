@@ -49,12 +49,14 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
   Usage:
     pnpm release            Interactive release
     pnpm release --dry-run  Preview only, no writes
+    pnpm release --yes      Skip confirmation prompt
     pnpm release --help     Show this help
 `)
   process.exit(0)
 }
 
 const dryRun = process.argv.includes('--dry-run')
+const autoConfirm = process.argv.includes('--yes') || process.argv.includes('-y')
 
 // ── Helpers ────────────────────────────────────────────────
 
@@ -332,12 +334,17 @@ async function main() {
     // tag doesn't exist, safe to proceed
   }
 
-  // 5c. Confirmation prompt (reuse same readline to avoid piped-stdin issues)
-  const confirm = await rl.question(`\nProceed with release ${tag}? [y/N] `)
-  rl.close()
-  if (confirm.trim().toLowerCase() !== 'y') {
-    console.log('Aborted.')
-    process.exit(0)
+  // 5c. Confirmation prompt
+  if (!autoConfirm) {
+    const confirm = await rl.question(`\nProceed with release ${tag}? [y/N] `)
+    rl.close()
+    if (confirm.trim().toLowerCase() !== 'y') {
+      console.log('Aborted.')
+      process.exit(0)
+    }
+  } else {
+    rl.close()
+    console.log(`\nAuto-confirmed release ${tag} (--yes)`)
   }
 
   // 6. Update plugin versions
