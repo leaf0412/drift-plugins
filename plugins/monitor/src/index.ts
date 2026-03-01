@@ -7,6 +7,7 @@ export function createMonitorPlugin(): DriftPlugin {
   let savedCtx: PluginContext | null = null
   let timer: ReturnType<typeof setInterval> | null = null
   let wsServer: any = null
+  let subscriberCount = 0
 
   return {
     name: 'monitor',
@@ -26,10 +27,12 @@ export function createMonitorPlugin(): DriftPlugin {
       wsServer.onMessage((_ws: any, data: unknown) => {
         const msg = data as { type?: string; payload?: { interval?: number } }
         if (msg.type === 'monitor.subscribe') {
+          subscriberCount++
           const interval = msg.payload?.interval ?? ctx.config.get<number>('defaultInterval', 5000)
-          startPushing(interval)
+          if (subscriberCount === 1) startPushing(interval)
         } else if (msg.type === 'monitor.unsubscribe') {
-          stopPushing()
+          subscriberCount = Math.max(0, subscriberCount - 1)
+          if (subscriberCount === 0) stopPushing()
         }
       })
 
@@ -42,6 +45,7 @@ export function createMonitorPlugin(): DriftPlugin {
 
     async stop() {
       stopPushing()
+      subscriberCount = 0
     },
   }
 
