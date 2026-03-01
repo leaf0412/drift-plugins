@@ -16,7 +16,9 @@ export type { PluginMgrOptions, PluginInfo } from './types.js'
 interface BridgeCtx {
   atoms: { atom<T>(key: string, initial: T): { deref(): T } }
   events: { emit(event: string, data?: unknown): void }
-  logger: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void }
+  logger: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void; error(msg: string, ...args: unknown[]): void }
+  call: <T = unknown>(capability: string, data?: unknown) => Promise<T>
+  pluginId?: string
   registerTool?: (reg: { name: string; description: string; parametersSchema: unknown; execute: (args: unknown) => Promise<unknown> }) => void
 }
 
@@ -320,24 +322,10 @@ export function createPluginMgrPlugin(options?: PluginMgrOptions) {
         mkdirSync(opts.pluginsDir, { recursive: true })
       }
 
-      // Get HTTP app via atom (old daemon doesn't support ctx.call)
-      let app: any
-      try {
-        const plugins = await import('@drift/plugins') as any
-        app = plugins.getHttpApp(ctx)
-      } catch {
-        ctx.logger.warn('plugin-mgr: HTTP app not available, skipping routes')
-        return
-      }
+      // HTTP routes for plugin management are already registered by daemon.ts
+      // This plugin only registers AI agent tools for plugin CRUD
 
-      // Get PluginManager from atoms
-      const pm = ctx.atoms.atom<any>('core.pluginManager', null).deref()
-
-      // Register HTTP routes
-      registerPluginMgrRoutes(app, pm)
-      ctx.logger.info('plugin-mgr: HTTP routes registered')
-
-      // Register AI agent tools via ctx.registerTool (old daemon pattern)
+      // Register AI agent tools
       const tools = buildTools(opts)
       for (const tool of tools) {
         ctx.registerTool?.({

@@ -2,8 +2,9 @@
  * Minimal context interface for bridging between old daemon context and new plugin patterns.
  */
 interface BridgeCtx {
-  atoms: { atom<T>(key: string, initial: T): { deref(): T } }
   logger: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void }
+  call: <T = unknown>(capability: string, data?: unknown) => Promise<T>
+  pluginId?: string
 }
 
 export function createUsagePlugin() {
@@ -12,11 +13,10 @@ export function createUsagePlugin() {
     version: '0.1.0',
 
     async init(ctx: BridgeCtx) {
-      // Get HTTP app from atoms (old daemon doesn't support ctx.call)
+      // Get HTTP app via capability
       let app: any
       try {
-        const plugins = await import('@drift/plugins') as any
-        app = plugins.getHttpApp(ctx)
+        app = await ctx.call('http.app', { pluginId: (ctx as any).pluginId ?? 'usage' })
       } catch {
         ctx.logger.warn('usage: HTTP app not available, skipping route')
         return
@@ -27,8 +27,7 @@ export function createUsagePlugin() {
 
         let db: any
         try {
-          const plugins = await import('@drift/plugins') as any
-          db = plugins.getStorageDb(ctx)
+          db = await ctx.call('sqlite.db')
         } catch {
           return c.json({
             today: { promptTokens: 0, completionTokens: 0, sessions: 0 },
