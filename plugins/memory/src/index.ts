@@ -12,8 +12,9 @@ import { ensureMemoryDigestAgent } from './digest-agent.js'
  * Create the memory plugin that owns vector embeddings, memory CRUD,
  * knowledge entries, and semantic recall.
  *
- * If an EmbeddingConfig is provided, the OpenAI embedding service is
- * initialised for auto-embed on memory creation and /api/recall.
+ * If an EmbeddingConfig is provided (constructor override), the OpenAI
+ * embedding service is initialised directly. Otherwise, config is read
+ * from ctx.config in init().
  */
 export function createMemoryPlugin(embeddingConfig?: EmbeddingConfig): DriftPlugin {
   let db: Database.Database | null = null
@@ -21,15 +22,33 @@ export function createMemoryPlugin(embeddingConfig?: EmbeddingConfig): DriftPlug
   return {
     name: 'memory',
 
+    configSchema: {
+      apiKey:  { type: 'string', description: 'OpenAI 兼容 API Key (embedding)', secret: true },
+      baseURL: { type: 'string', description: 'Embedding API 基础 URL', default: 'https://api.openai.com/v1' },
+      model:   { type: 'string', description: 'Embedding 模型名', default: 'text-embedding-3-small' },
+    },
+    requiresCapabilities: ['sqlite.db', 'http.app'],
+
     tools: buildMemoryTools(() => db!),
 
     async init(ctx: PluginContext) {
       db = await ctx.call<Database.Database>('sqlite.db')
       const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
 
-      const embedSvc = embeddingConfig
-        ? createEmbeddingService(embeddingConfig)
-        : null
+      // Resolve embedding config: constructor override → ctx.config
+      let embedSvc = null
+      if (embeddingConfig) {
+        embedSvc = createEmbeddingService(embeddingConfig)
+      } else {
+        const apiKey = ctx.config.get<string>('apiKey')
+        const baseURL = ctx.config.get<string>('baseURL', 'https://api.openai.com/v1')
+        const model = ctx.config.get<string>('model', 'text-embedding-3-small')
+        if (apiKey) {
+          embedSvc = createEmbeddingService({ apiKey, baseURL, model })
+        } else {
+          ctx.logger.warn('Memory plugin: no apiKey configured, embeddings disabled')
+        }
+      }
 
       registerMemoryRoutes(app, { db, embedSvc })
 

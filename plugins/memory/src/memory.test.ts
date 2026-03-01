@@ -38,9 +38,16 @@ function createMockContext(
   app: Hono,
 ): PluginContext {
   const services = new Map<string, Function>()
+  const configStore = new Map<string, unknown>()
   return {
     pluginId: 'memory',
     logger: noopLogger,
+    config: {
+      get<T>(key: string, defaultValue?: T): T | undefined {
+        return configStore.has(key) ? configStore.get(key) as T : defaultValue
+      },
+      async set(key: string, value: unknown) { configStore.set(key, value) },
+    },
     register: vi.fn((key: string, handler: Function) => { services.set(key, handler) }),
     call: vi.fn(async (key: string, ..._args: unknown[]) => {
       if (key === 'sqlite.db') return db
