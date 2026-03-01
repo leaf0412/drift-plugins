@@ -3,17 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { createSopPlugin } from './index.js'
-import type { PluginContext, LoggerLike } from '@drift/core/kernel'
+import type { PluginContext, LoggerLike, DriftTool, ToolResult } from '@drift/core/kernel'
 
 // ── Test helpers ──────────────────────────────────────────────
 
 function makeLogger(): LoggerLike {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
-}
-
-interface ToolRegistration {
-  name: string
-  execute: (args: unknown) => Promise<{ success: boolean; output: string; error?: string }>
 }
 
 function makeContext(logger: LoggerLike): PluginContext {
@@ -27,10 +22,16 @@ function makeContext(logger: LoggerLike): PluginContext {
       if (handler) return handler(...args)
       throw new Error(`Service not found: ${key}`)
     }),
-    emit: vi.fn(async () => {}),
+    emit: vi.fn(),
     on: vi.fn(() => () => {}),
   }
   return ctx as unknown as PluginContext
+}
+
+function findTool(tools: DriftTool[], name: string): DriftTool {
+  const tool = tools.find(t => t.name === name)
+  if (!tool) throw new Error(`Tool not found: ${name}`)
+  return tool
 }
 
 function writeSopMd(sopDir: string, filename: string, content: string): void {
@@ -81,7 +82,6 @@ describe('createSopPlugin', () => {
   it('creates sops directory if it does not exist', async () => {
     const newMindDir = join(tmpDir, 'fresh-mind')
     mkdirSync(newMindDir, { recursive: true })
-    // sops dir does NOT exist yet
 
     const logger = makeLogger()
     const ctx = makeContext(logger)
@@ -101,25 +101,18 @@ describe('createSopPlugin', () => {
     const plugin = createSopPlugin(mindDir)
     await plugin.init!(ctx)
 
-    // sop.registry is registered via ctx.register, retrieve via ctx.call
     const registry = await ctx.call<Map<string, unknown>>('sop.registry')
     expect(registry.size).toBe(1)
     expect(registry.has('morning-check')).toBe(true)
   })
 
-  it('registers sop_list, sop_run, sop_status, sop_advance tools via ctx.register', async () => {
-    const logger = makeLogger()
-    const ctx = makeContext(logger)
-
+  it('declares sop_list, sop_run, sop_status, sop_advance in tools[]', () => {
     const plugin = createSopPlugin(mindDir)
-    await plugin.init!(ctx)
-
-    const registerCalls = (ctx.register as ReturnType<typeof vi.fn>).mock.calls
-    const registeredKeys = registerCalls.map((call: unknown[]) => call[0] as string)
-    expect(registeredKeys).toContain('tool.sop_list')
-    expect(registeredKeys).toContain('tool.sop_run')
-    expect(registeredKeys).toContain('tool.sop_status')
-    expect(registeredKeys).toContain('tool.sop_advance')
+    const toolNames = (plugin.tools ?? []).map(t => t.name)
+    expect(toolNames).toContain('sop_list')
+    expect(toolNames).toContain('sop_run')
+    expect(toolNames).toContain('sop_status')
+    expect(toolNames).toContain('sop_advance')
   })
 
   it('sop_list tool returns list of SOP slugs', async () => {
@@ -128,11 +121,11 @@ describe('createSopPlugin', () => {
 
     const logger = makeLogger()
     const ctx = makeContext(logger)
-
     const plugin = createSopPlugin(mindDir)
     await plugin.init!(ctx)
 
-    const result = await ctx.call<{ success: boolean; output: string }>('tool.sop_list', {})
+    const tool = findTool(plugin.tools!, 'sop_list')
+    const result = await tool.execute({}, ctx) as ToolResult
     expect(result.success).toBe(true)
     const parsed = JSON.parse(result.output)
     expect(parsed.map((s: { slug: string }) => s.slug).sort()).toEqual(['sop-a', 'sop-b'])
@@ -141,11 +134,11 @@ describe('createSopPlugin', () => {
   it('sop_status tool returns 404-style error for unknown execution', async () => {
     const logger = makeLogger()
     const ctx = makeContext(logger)
-
     const plugin = createSopPlugin(mindDir)
     await plugin.init!(ctx)
 
-    const result = await ctx.call<{ success: boolean; output: string; error?: string }>('tool.sop_status', { executionId: 'nonexistent' })
+    const tool = findTool(plugin.tools!, 'sop_status')
+    const result = await tool.execute({ executionId: 'nonexistent' }, ctx) as ToolResult
     expect(result.success).toBe(false)
     expect(result.error).toContain('not found')
   })
@@ -153,11 +146,11 @@ describe('createSopPlugin', () => {
   it('sop_run tool returns error for unknown sop slug', async () => {
     const logger = makeLogger()
     const ctx = makeContext(logger)
-
     const plugin = createSopPlugin(mindDir)
     await plugin.init!(ctx)
 
-    const result = await ctx.call<{ success: boolean; output: string; error?: string }>('tool.sop_run', { slug: 'nonexistent' })
+    const tool = findTool(plugin.tools!, 'sop_run')
+    const result = await tool.execute({ slug: 'nonexistent' }, ctx) as ToolResult
     expect(result.success).toBe(false)
     expect(result.error).toContain('not found')
   })
@@ -167,11 +160,11 @@ describe('createSopPlugin', () => {
 
     const logger = makeLogger()
     const ctx = makeContext(logger)
-
     const plugin = createSopPlugin(mindDir)
     await plugin.init!(ctx)
 
-    await ctx.call('tool.sop_run', { slug: 'test-sop' })
+    const tool = findTool(plugin.tools!, 'sop_run')
+    await tool.execute({ slug: 'test-sop' }, ctx)
 
     expect((ctx.emit as ReturnType<typeof vi.fn>).mock.calls.some(
       (call: unknown[]) => call[0] === 'sop.started'
