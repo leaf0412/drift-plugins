@@ -1,0 +1,10 @@
+{
+  "name": "@drift-plugins/web-notify",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "devDependencies": {
+    "@drift/core": "link:../../../drift/packages/core"
+  }
+}
