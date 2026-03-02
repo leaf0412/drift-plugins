@@ -24,6 +24,11 @@ function formatEventContent(event: string, data: unknown): string {
 
   const obj = data as Record<string, unknown>
 
+  // reminder.fire — extract content + remind_at timestamp
+  if (obj.remind_at && typeof obj.content === 'string') {
+    return `⏰ 提醒: ${obj.content}\n时间: ${obj.remind_at}`
+  }
+
   // cron.chat / cron.result / chat.complete — extract content + optional jobName header
   if (typeof obj.content === 'string') {
     const jobName = obj.jobName as string | undefined
@@ -41,7 +46,7 @@ function formatEventContent(event: string, data: unknown): string {
 
 // ── Known event list ──────────────────────────────────────
 
-const SUBSCRIBED_EVENTS = ['cron.result', 'cron.notify', 'cron.chat', 'task.reminder'] as const
+const SUBSCRIBED_EVENTS = ['cron.result', 'cron.notify', 'cron.chat', 'task.reminder', 'reminder.fire'] as const
 
 // ── Plugin Factory ────────────────────────────────────────
 
