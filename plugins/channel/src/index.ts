@@ -4,6 +4,7 @@ import { ChannelRouter } from './router.js'
 import { HookPipeline } from './hooks.js'
 import type { InboundMessage, OutboundMessage } from './types.js'
 import { registerPairingRoutes } from './pairing-routes.js'
+import { addChannelUser, getChannelUsers } from '@drift/plugins'
 
 // ── Module-level registry ────────────────────────────────────
 // Keyed by pluginId; used for synchronous getChannelRouter/getChannelHooks access.
@@ -31,6 +32,13 @@ export function createChannelPlugin(): DriftPlugin {
 
       hooks = new HookPipeline()
       _hooksRegistry.set(ctx.pluginId, hooks)
+
+      // Wire persistence so paired users survive daemon restarts
+      const db = await ctx.call<any>('sqlite.db')
+      router.setPersistence({
+        onPair: (channelId: string, userId: string) => addChannelUser(db, channelId, userId),
+        loadPairedUsers: (channelId: string) => getChannelUsers(db, channelId),
+      })
 
       // Register pairing API routes
       await registerPairingRoutes(ctx)
