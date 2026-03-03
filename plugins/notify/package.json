@@ -1,0 +1,11 @@
+{
+  "name": "drift-plugin-notify",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "description": "Notification dispatcher broadcasting events to registered channels",
+  "drift": {
+    "requires": ["sqlite.db", "http.app"]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "drift-plugin-plugin-mgr",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "description": "Plugin manager with CRUD agent tools for user plugins",
+  "drift": {}
+}

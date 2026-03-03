@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
+  "drift": {},
   "devDependencies": {
     "@drift/core": "link:../../../drift/packages/core"
   }

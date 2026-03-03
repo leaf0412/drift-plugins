@@ -1,0 +1,11 @@
+{
+  "name": "drift-plugin-feishu",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "description": "Feishu (Lark) messaging channel with webhook and WebSocket support",
+  "drift": {
+    "requires": ["chat.handle"]
+  }
+}

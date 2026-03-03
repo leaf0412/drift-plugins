@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
+  "drift": {
+    "requires": ["http.ws"]
+  },
   "devDependencies": {
     "@drift/core": "link:../../../drift/packages/core"
   }

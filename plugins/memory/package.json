@@ -1,0 +1,11 @@
+{
+  "name": "drift-plugin-memory",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "description": "Structured memory storage with embedding search and auto-extraction",
+  "drift": {
+    "requires": ["sqlite.db", "http.app"]
+  }
+}

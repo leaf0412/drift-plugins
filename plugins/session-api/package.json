@@ -1,0 +1,11 @@
+{
+  "name": "drift-plugin-session-api",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "description": "Session and message CRUD API with unified search",
+  "drift": {
+    "requires": ["sqlite.db", "http.app"]
+  }
+}

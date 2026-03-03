@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
+  "drift": {},
   "dependencies": {
     "node-cron": "^3.0.3"
   },
