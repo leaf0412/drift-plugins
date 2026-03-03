@@ -8,6 +8,7 @@ import { registerMemoryRoutes } from './routes.js'
 import { buildMemoryTools } from './tools.js'
 import { ensureMemoryDigestAgent } from './digest-agent.js'
 import { shouldExtract, parseExtractionResult, EXTRACTION_PROMPT } from './extractor.js'
+import { IMPORTANCE_BY_TYPE } from './constants.js'
 
 // ── Helpers ───────────────────────────────────────────────
 
@@ -25,6 +26,22 @@ function memorySave(
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(project, type, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   ).run(id, project, entry.type, entry.key, entry.value, now, now)
+
+  // Upsert memory_meta — preserve access_count on update (table may not exist in test DBs)
+  try {
+    const row = db.prepare(
+      `SELECT id FROM memory WHERE project = ? AND type = ? AND key = ?`,
+    ).get(project, entry.type, entry.key) as { id: string }
+
+    const importance = IMPORTANCE_BY_TYPE[entry.type] ?? 0.5
+    db.prepare(`
+      INSERT INTO memory_meta (source, source_id, importance, access_count, created_at)
+      VALUES ('memory', ?, ?, 0, ?)
+      ON CONFLICT(source, source_id) DO UPDATE SET importance = excluded.importance
+    `).run(row.id, importance, now)
+  } catch (err) {
+    if (err instanceof Error && !err.message.includes('no such table')) throw err
+  }
 }
 
 // ── Plugin Factory ────────────────────────────────────────

@@ -2,6 +2,7 @@ import type { DriftTool, ToolResult, PluginContext } from '@drift/core/kernel'
 import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
 import dayjs from 'dayjs'
+import { IMPORTANCE_BY_TYPE } from './constants.js'
 
 interface MemoryRow {
   id: string
@@ -75,6 +76,22 @@ export function buildMemoryTools(getDb: () => Database.Database): DriftTool[] {
              VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(project, type, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
           ).run(id, proj, type, key, value, now, now)
+
+          // Upsert memory_meta — preserve access_count on update (table may not exist in test DBs)
+          try {
+            const row = db.prepare(
+              `SELECT id FROM memory WHERE project = ? AND type = ? AND key = ?`,
+            ).get(proj, type, key) as { id: string }
+
+            const importance = IMPORTANCE_BY_TYPE[type] ?? 0.5
+            db.prepare(`
+              INSERT INTO memory_meta (source, source_id, importance, access_count, created_at)
+              VALUES ('memory', ?, ?, 0, ?)
+              ON CONFLICT(source, source_id) DO UPDATE SET importance = excluded.importance
+            `).run(row.id, importance, now)
+          } catch (err) {
+            if (err instanceof Error && !err.message.includes('no such table')) throw err
+          }
 
           return {
             success: true,

@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
 import dayjs from 'dayjs'
 import type { EmbeddingService } from './embeddings.js'
+import { IMPORTANCE_BY_TYPE } from './constants.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -160,6 +161,22 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRouteDeps): void {
        ON CONFLICT(project, type, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
     ).run(id, project, type, body.key, body.value, now, now)
 
+    // Upsert memory_meta — preserve access_count on update (table may not exist in test DBs)
+    try {
+      const row = db.prepare(
+        `SELECT id FROM memory WHERE project = ? AND type = ? AND key = ?`,
+      ).get(project, type, body.key) as { id: string }
+
+      const importance = IMPORTANCE_BY_TYPE[type] ?? 0.5
+      db.prepare(`
+        INSERT INTO memory_meta (source, source_id, importance, access_count, created_at)
+        VALUES ('memory', ?, ?, 0, ?)
+        ON CONFLICT(source, source_id) DO UPDATE SET importance = excluded.importance
+      `).run(row.id, importance, now)
+    } catch (err) {
+      if (err instanceof Error && !err.message.includes('no such table')) throw err
+    }
+
     // Auto-embed for semantic search (fire and forget)
     if (embedSvc) {
       embedSvc.storeEmbedding(db, id, `${body.key}: ${body.value}`).catch(() => {})
@@ -277,6 +294,22 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRouteDeps): void {
         createdAt: r.created_at,
         updatedAt: r.updated_at,
       }))
+
+      // Bump access counts for returned entries (table may not exist in test DBs)
+      if (entries.length > 0) {
+        try {
+          const bumpNow = dayjs().toISOString()
+          const bumpStmt = db.prepare(`
+            UPDATE memory_meta SET access_count = access_count + 1, last_accessed = ?
+            WHERE source = 'memory' AND source_id = ?
+          `)
+          for (const entry of entries) {
+            bumpStmt.run(bumpNow, entry.id)
+          }
+        } catch (err) {
+          if (err instanceof Error && !err.message.includes('no such table')) throw err
+        }
+      }
 
       return c.json({ entries })
     } catch (err) {
