@@ -46,7 +46,7 @@ export function logNotification(
     channel: string
     eventType: string
     title: string
-    status: 'success' | 'failed'
+    status: 'success' | 'failed' | 'dnd_suppressed'
     errorMsg?: string
   },
 ): void {

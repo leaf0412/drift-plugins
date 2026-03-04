@@ -48,6 +48,18 @@ function formatEventContent(event: string, data: unknown): string {
 
 const SUBSCRIBED_EVENTS = ['cron.result', 'cron.notify', 'cron.chat', 'task.reminder', 'reminder.fire'] as const
 
+// ── DND Helper ────────────────────────────────────────────
+
+function getDndUntil(db: Database.Database | null): string | null {
+  if (!db) return null
+  try {
+    const row = db.prepare("SELECT value FROM notify_settings WHERE key = 'dnd_until'").get() as { value: string } | undefined
+    return row?.value ?? null
+  } catch {
+    return null
+  }
+}
+
 // ── Plugin Factory ────────────────────────────────────────
 
 /**
@@ -56,7 +68,12 @@ const SUBSCRIBED_EVENTS = ['cron.result', 'cron.notify', 'cron.chat', 'task.remi
  * On each subscribed event, broadcasts the payload to every registered Channel
  * and logs success/failure to the notification_log table.
  *
- * Publishes the `event.log` capability so other plugins can log events.
+ * Supports urgency levels: 'urgent' | 'important' | 'info'.
+ * - urgent: always delivered, breaks through DND
+ * - important (default): delivered unless DND is active
+ * - info: only delivered to web-notify channel
+ *
+ * Publishes the `event.log` and `notify.dnd` capabilities.
  */
 export function createNotifyPlugin(): DriftPlugin {
   const unsubs: Array<() => void> = []
@@ -64,15 +81,27 @@ export function createNotifyPlugin(): DriftPlugin {
 
   return {
     name: 'notify',
-    version: '1.1.0',
+    version: '1.2.0',
     requiresCapabilities: ['sqlite.db', 'http.app'],
     capabilities: {
       'event.log': (data) => logEvent(db!, data as EventLogInput),
+      'notify.dnd': (data) => {
+        const { until } = data as { until: string | null }
+        if (!db) return
+        if (until) {
+          db.prepare("INSERT OR REPLACE INTO notify_settings (key, value) VALUES ('dnd_until', ?)").run(until)
+        } else {
+          db.prepare("DELETE FROM notify_settings WHERE key = 'dnd_until'").run()
+        }
+      },
     },
 
     async init(ctx: PluginContext) {
       db = await ctx.call<Database.Database>('sqlite.db')
       const app = await ctx.call<Hono>('http.app', { pluginId: ctx.pluginId })
+
+      // Create notify_settings table for DND and other settings
+      db.exec(`CREATE TABLE IF NOT EXISTS notify_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`)
 
       // Register HTTP routes
       registerNotifyRoutes(app, {
@@ -100,35 +129,60 @@ export function createNotifyPlugin(): DriftPlugin {
 
       for (const event of SUBSCRIBED_EVENTS) {
         const unsub = ctx.on(event, async (data: unknown) => {
+          const obj = data as Record<string, unknown> | undefined
+          const urgency = (obj?.urgency as string) ?? 'important'
+          const title = (obj?.jobName ?? obj?.title ?? event) as string
+          const content = formatEventContent(event, data)
+
+          // DND check — urgent events break through
+          const dndUntil = getDndUntil(db)
+          if (dndUntil && new Date() < new Date(dndUntil) && urgency !== 'urgent') {
+            ctx.logger.info(`[notify] event "${event}" suppressed by DND (until ${dndUntil})`)
+            if (db) {
+              logNotification(db, {
+                channel: 'suppressed',
+                eventType: event,
+                title,
+                status: 'dnd_suppressed',
+              })
+            }
+            return
+          }
+
           const channels = await ctx.call<Channel[]>('channel.list').catch(() => [] as Channel[])
-          ctx.logger.info(`[notify] event "${event}" → dispatching to ${channels.length} channel(s)`)
+          ctx.logger.info(`[notify] event "${event}" (urgency: ${urgency}) → dispatching to ${channels.length} channel(s)`)
+
           for (const channel of channels) {
-            const obj = data as Record<string, unknown> | undefined
-            const title = obj?.jobName as string ?? obj?.title as string ?? event
-            const content = formatEventContent(event, data)
+            // info-level events only go to web-notify channel
+            if (urgency === 'info' && channel.name !== 'web-notify') continue
+
             try {
               ctx.logger.info(`[notify] sending to channel "${channel.name}" (event: ${event}, title: ${title})`)
               await channel.send({
                 type: 'text',
                 content,
-                metadata: { event },
+                metadata: { event, urgency },
               })
               ctx.logger.info(`[notify] sent to "${channel.name}" OK`)
-              logNotification(db, {
-                channel: channel.name,
-                eventType: event,
-                title,
-                status: 'success',
-              })
+              if (db) {
+                logNotification(db, {
+                  channel: channel.name,
+                  eventType: event,
+                  title,
+                  status: 'success',
+                })
+              }
             } catch (err) {
               ctx.logger.error(`[notify] send to "${channel.name}" FAILED: ${(err as Error).message}`)
-              logNotification(db, {
-                channel: channel.name,
-                eventType: event,
-                title,
-                status: 'failed',
-                errorMsg: (err as Error).message,
-              })
+              if (db) {
+                logNotification(db, {
+                  channel: channel.name,
+                  eventType: event,
+                  title,
+                  status: 'failed',
+                  errorMsg: (err as Error).message,
+                })
+              }
             }
           }
         })
