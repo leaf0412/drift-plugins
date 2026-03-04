@@ -1,0 +1,14 @@
+{
+  "name": "drift-plugin-gitlab",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "description": "GitLab integration — API client, event tracking, pipeline/MR/issue tools",
+  "drift": {
+    "requires": ["sqlite.db"]
+  },
+  "devDependencies": {
+    "@drift/core": "link:../../../../drift/packages/core"
+  }
+}
